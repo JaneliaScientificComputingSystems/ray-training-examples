@@ -1,4 +1,4 @@
-# Ray Distributed Training Examples — Janelia HPC
+# Ray Distributed Training Examples
 
 Distributed PyTorch training with Ray on Janelia's GPU cluster. The submission script auto-configures NCCL for InfiniBand (H200/H100) or Ethernet (L4/A100) based on the queue you select.
 
