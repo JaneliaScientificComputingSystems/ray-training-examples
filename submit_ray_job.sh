@@ -124,33 +124,23 @@ cat << EOF | bsub
 if [ -n "${VENV_PATH}" ]; then source ${VENV_PATH}/bin/activate; fi
 
 #-----------------------------------------------------------------------
-# NCCL configuration — set per queue at submission time
-# H200/H100: InfiniBand, GPUDirect RDMA, mlx5_5 (Ethernet) excluded
-# L4/A100:   Ethernet, original settings preserved
+# NCCL configuration — sourced from nccl_ib.sh for IB queues
+# All NCCL env vars live in one place to avoid duplication
 #-----------------------------------------------------------------------
 if [ "${NETWORK_BACKEND}" = "IB" ]; then
     echo "NCCL backend: InfiniBand"
-    echo "  HCAs: mlx5_0,1,2,3,4,6,7,8  (mlx5_5=Ethernet excluded)"
-    export NCCL_IB_DISABLE=0
-    export NCCL_IB_HCA=mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_6,mlx5_7,mlx5_8
-    export NCCL_IB_QPS_PER_CONNECTION=4
-    export NCCL_IB_TIMEOUT=22
-    export NCCL_IB_RETRY_CNT=7
-    export NCCL_NET_GDR_LEVEL=2
-    export NCCL_SOCKET_IFNAME=ibp26s0
-    export NCCL_DEBUG_SUBSYS=NET
+    source "$(cd "$(dirname "$0")" && pwd)/nccl_ib.sh"
+    echo "  HCAs: \$NCCL_IB_HCA"
 else
     echo "NCCL backend: Ethernet"
     export NCCL_IB_DISABLE=1
     export NCCL_NET_GDR_LEVEL=0
+    export NCCL_P2P_DISABLE=0
+    export NCCL_SHM_DISABLE=0
+    export NCCL_BUFFSIZE=8388608
+    export NCCL_DEBUG=INFO
+    export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 fi
-
-# Common settings for both backends
-export NCCL_P2P_DISABLE=0
-export NCCL_SHM_DISABLE=0
-export NCCL_BUFFSIZE=8388608
-export NCCL_DEBUG=INFO
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 export RAY_TMPDIR="/scratch/\$(whoami)/ray_\$(whoami)"
 mkdir -p \$RAY_TMPDIR
@@ -197,28 +187,12 @@ head_node=\${hosts[0]}
 echo ""
 echo "Head node: \$head_node  Port: \$port"
 
-# Build env export block to pass into blaunch subshells
-NCCL_ENV_BLOCK="
-export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-1}
-export NCCL_P2P_DISABLE=0
-export NCCL_SHM_DISABLE=0
-export NCCL_BUFFSIZE=8388608
-export NCCL_DEBUG=INFO
-"
+# Path to NCCL env file — sourced by ray start shells so the daemon
+# (and all workers it spawns) inherit the vars.
 if [ "${NETWORK_BACKEND}" = "IB" ]; then
-    NCCL_ENV_BLOCK="\$NCCL_ENV_BLOCK
-export NCCL_IB_HCA=mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_6,mlx5_7,mlx5_8
-export NCCL_IB_QPS_PER_CONNECTION=4
-export NCCL_IB_TIMEOUT=22
-export NCCL_IB_RETRY_CNT=7
-export NCCL_NET_GDR_LEVEL=2
-export NCCL_SOCKET_IFNAME=ibp26s0
-export NCCL_DEBUG_SUBSYS=NET
-"
+    NCCL_ENV_FILE="$(cd "$(dirname "$0")" && pwd)/nccl_ib.sh"
 else
-    NCCL_ENV_BLOCK="\$NCCL_ENV_BLOCK
-export NCCL_NET_GDR_LEVEL=0
-"
+    NCCL_ENV_FILE=""
 fi
 
 echo ""
@@ -228,7 +202,7 @@ echo "================================================================"
 
 blaunch -z \$head_node "
     if [ -n '${VENV_PATH}' ]; then source ${VENV_PATH}/bin/activate; fi
-    \$NCCL_ENV_BLOCK
+    if [ -n '\$NCCL_ENV_FILE' ] && [ -f '\$NCCL_ENV_FILE' ]; then source \$NCCL_ENV_FILE; fi
     ray start --head --port \$port \
         --num-cpus=${CPUS_PER_NODE} \
         --num-gpus=${GPUS_PER_NODE} \
@@ -247,7 +221,7 @@ if [ ${NUM_NODES} -gt 1 ]; then
     for host in "\${workers[@]}"; do
         blaunch -z \$host "
             if [ -n '${VENV_PATH}' ]; then source ${VENV_PATH}/bin/activate; fi
-            \$NCCL_ENV_BLOCK
+            if [ -n '\$NCCL_ENV_FILE' ] && [ -f '\$NCCL_ENV_FILE' ]; then source \$NCCL_ENV_FILE; fi
             ray start --address \$head_node:\$port \
                 --num-cpus=${CPUS_PER_NODE} \
                 --num-gpus=${GPUS_PER_NODE} \

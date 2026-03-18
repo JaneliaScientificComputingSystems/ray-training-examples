@@ -51,7 +51,24 @@ done
 - LSF cluster access with GPU queue permissions
 - Python 3.8+
 - Shared storage for datasets and model checkpoints (`/nrs/` or home directory)
-- For H100/H200 jobs: IB drivers present on compute nodes (`ibv_devinfo` returns device list)
+- For H100/H200 jobs:
+  - IB drivers present on compute nodes (`ibv_devinfo` returns device list)
+  - `nvidia-peermem` kernel module loaded (`lsmod | grep nvidia_peermem`)
+  - **PCIe ACS disabled** for GPUDirect RDMA (see below)
+
+### PCIe ACS (required for GPUDirect RDMA on IB nodes)
+
+PCIe Access Control Services (ACS) blocks direct GPU-to-NIC peer-to-peer DMA, which GPUDirect RDMA needs. ACS is enabled by default on RHEL 9 but must be disabled on all GPU compute nodes. With `iommu=pt` (passthrough), disabling ACS is safe.
+
+```bash
+# Run as root on each GPU node — disable now and install systemd service:
+/groups/scicompsys/home/cericg/Ray_IB/test_scripts/disable_acs.sh --install
+
+# Verify GDR works between two nodes:
+# Node A: ib_write_bw -d mlx5_0 --report_gbits -D 2 --use_cuda=0
+# Node B: ib_write_bw -d mlx5_0 --report_gbits -D 2 --use_cuda=0 <nodeA>
+# Expected: ~380-400 Gb/s. If you see syndrome 0x51, ACS is still enabled.
+```
 
 ---
 
@@ -67,9 +84,13 @@ source ~/ray_env/bin/activate
 # Install Ray with training components
 pip install "ray[train]" torch torchvision torchaudio
 
+# Upgrade NCCL to 2.29.7+ (fixes IB QP setup issues in earlier versions)
+pip install "nvidia-nccl-cu12>=2.29.7"
+
 # Verify
 python -c "import ray, torch, torchvision; print('Installation successful')"
 python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+python -c "import torch; print(f'NCCL version: {torch.cuda.nccl.version()}')"
 ```
 
 For GPT-2 training, also install:
@@ -85,12 +106,15 @@ pip install transformers datasets tiktoken
 | File | Description |
 |---|---|
 | `submit_ray_job.sh` | Universal LSF job submission script — auto-configures NCCL per queue |
+| `nccl_ib.sh` | NCCL InfiniBand environment variables — single source of truth for IB config |
 | `test_ray_cluster.py` | Validates cluster setup, GPU access, and network backend |
 | `cifar10_distributed_training.py` | ResNet-18 on CIFAR-10 — multi-node DDP training |
 | `image_classifier.py` | CIFAR-10 inference with trained ResNet-18 checkpoints |
 | `gpt2_distributed_training.py` | GPT-2 small (117M) on OpenWebText — DDP and FSDP modes |
 | `gpt2_eval.py` | Perplexity evaluation on OpenWebText val set |
 | `gpt2_generate.py` | Text generation — interactive, batch, and single-prompt modes |
+| `../test_scripts/disable_acs.sh` | Disables PCIe ACS on GPU nodes (required for GPUDirect RDMA) |
+| `../test_scripts/test_nccl_cross_node.py` | Minimal 2-rank cross-node NCCL allreduce test |
 
 ---
 
@@ -104,8 +128,10 @@ chmod +x submit_ray_job.sh
 
 The script automatically selects the correct NCCL configuration based on the queue:
 
-- **H100/H200 queues** — InfiniBand enabled, GPUDirect RDMA, `mlx5_5` excluded
+- **H100/H200 queues** — sources `nccl_ib.sh` (InfiniBand, GPUDirect RDMA, `mlx5_5` excluded)
 - **L4/A100 queues** — Ethernet NCCL
+
+All IB-specific NCCL environment variables live in `nccl_ib.sh` — edit that file to tune IB settings. The submit script sources it in both the bsub shell and the `ray start` blaunch shells so all Ray workers inherit the vars.
 
 ### Usage
 
@@ -555,8 +581,10 @@ grep "NET/IB\|NET/Socket" ray_job_*.out | head -5
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `NET/Socket` in output on H100/H200 | NCCL fell back to TCP | Confirm `NCCL_IB_DISABLE=0` and HCA names with `ibv_devinfo` |
-| Job hangs at first AllReduce on IB node | `mlx5_5` in `NCCL_IB_HCA` | Remove `mlx5_5` — it is Ethernet |
+| `NET/Socket` in output on H100/H200 | NCCL fell back to TCP | Check `nccl_ib.sh` is sourced; verify with `ibv_devinfo` |
+| Job hangs at first AllReduce on IB node | `mlx5_5` in `NCCL_IB_HCA` | Remove `mlx5_5` — it is Ethernet, not IB |
+| Job hangs during NCCL init with GDRDMA | PCIe ACS enabled | Run `disable_acs.sh` as root on compute nodes |
+| `ib_write_bw --use_cuda` fails with 0x51 | PCIe ACS blocking peer DMA | Same — disable ACS |
 | `ibv_devinfo` fails on compute node | IB kernel modules not loaded | Run `lsmod | grep ib` and contact SCS |
 | IB bandwidth low in `ib_send_bw` | Cable, SFP, or switch port issue | Check `ibstat` for port state; escalate to SCS if not Active |
 | Out of memory | Batch size too large | Reduce `--batch-size`; start at 64–128 per GPU for CIFAR-10 |
