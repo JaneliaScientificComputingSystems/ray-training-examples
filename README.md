@@ -92,10 +92,14 @@ Trains a ResNet-18 (11M parameters) image classifier using Distributed Data Para
 - Best checkpoint based on test accuracy (~89-91% after 50 epochs)
 - Checkpoints can be used with `image_classifier.py` for inference on new images
 
-### Prepare data
+### Data
+
+CIFAR-10 is available at `/nrs/scicompsys/Goran/cifar10` (shared NFS). Training scripts use this by default — no setup required.
+
+To prepare your own copy (one-time, ~170 MB):
 
 ```bash
-mkdir -p ~/datasets/cifar10 && cd ~/datasets/cifar10
+mkdir -p /your/path/cifar10 && cd /your/path/cifar10
 wget https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
 tar -xzf cifar-10-python.tar.gz && rm cifar-10-python.tar.gz
 ```
@@ -117,8 +121,8 @@ tar -xzf cifar-10-python.tar.gz && rm cifar-10-python.tar.gz
 ### Inference
 
 ```bash
-python image_classifier.py --model ./models/cifar10_resnet18_best_*.pth --test
-python image_classifier.py --model ./models/cifar10_resnet18_best_*.pth --image photo.jpg
+python image_classifier.py --model ./models/cifar10_resnet18_best.pth --test
+python image_classifier.py --model ./models/cifar10_resnet18_best.pth --image photo.jpg
 ```
 
 ---
@@ -140,14 +144,16 @@ Trains GPT-2 small (117M parameters, 12 layers, 768 hidden dim, 12 attention hea
 - Model checkpoints (`.pth` files) saved to `./models/`
 - Trained models can be evaluated with `gpt2_eval.py` (perplexity) or used for text generation with `gpt2_generate.py`
 
-### Prepare data (~30 min)
+### Data
+
+Tokenized OpenWebText is available at `/nrs/scicompsys/Goran/openwebtext` (shared NFS). Training scripts use this by default — no setup required.
+
+To prepare your own copy (one-time, ~30 min, ~9 GB):
 
 ```bash
 pip install datasets tiktoken
-./prepare_openwebtext.sh
+./prepare_openwebtext.sh --data-dir=/your/path
 ```
-
-Produces `~/datasets/openwebtext/train.bin` (~9 GB, ~4.5B tokens) and `val.bin` (~4.5 MB).
 
 ### Train
 
@@ -191,15 +197,15 @@ Trains ResNet-50 (25.6M parameters) using DDP with large-batch SGD (momentum 0.9
 - Model checkpoints (`.pth` files) saved to `./models/`
 - Target: ~76%+ top-1 accuracy after 90 epochs (~3h on 16x H200)
 
-### Prepare data (~15 min)
+### Data
 
-Requires HuggingFace account with access to [ILSVRC/imagenet-1k](https://huggingface.co/datasets/ILSVRC/imagenet-1k).
+ImageNet-1K is available at `/nrs/scicompsys/Goran/imagenet` (shared NFS, ~138 GB). Training scripts use this by default — no setup required.
+
+To prepare your own copy (one-time, ~15 min, requires [HuggingFace access to ILSVRC/imagenet-1k](https://huggingface.co/datasets/ILSVRC/imagenet-1k)):
 
 ```bash
-./prepare_imagenet.sh
+./prepare_imagenet.sh --data-dir=/your/path
 ```
-
-Downloads 294 parquet shards (~138 GB) to `/nrs/scicompsys/Goran/imagenet`. Data is read directly via Ray Data — no caching or conversion needed.
 
 ### Train
 
