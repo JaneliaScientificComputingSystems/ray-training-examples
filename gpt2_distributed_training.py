@@ -2,25 +2,26 @@
 """
 GPT-2 small (117M) distributed training on OpenWebText.
 Supports DDP and FSDP — toggle with --mode flag.
+Uses Ray Data for streaming data loading (official Ray Train pattern).
 Works on all Janelia GPU queues — IB and Ethernet NCCL.
 """
 import argparse
 import contextlib
+import glob
 import os
 import math
 import time
 import numpy as np
 import ray
+import ray.train
+import ray.train.torch
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from ray.train import ScalingConfig, RunConfig
 from ray.train.torch import TorchTrainer
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
-from datetime import datetime
 
 
 def parse_args():
@@ -28,14 +29,13 @@ def parse_args():
     parser.add_argument("--num-gpus",    type=int, required=True)
     parser.add_argument("--num-nodes",   type=int, required=True)
     parser.add_argument("--mode",        choices=["ddp", "fsdp"], default="ddp",
-                        help="DDP: replicated params. FSDP: sharded params (use for larger models)")
+                        help="DDP: replicated params. FSDP: sharded params")
     parser.add_argument("--batch-size",  type=int, default=8,
-                        help="micro-batch per GPU (tokens = batch_size * seq_len)")
+                        help="micro-batch per GPU (sequences per step)")
     parser.add_argument("--seq-len",     type=int, default=1024)
     parser.add_argument("--grad-accum",  type=int, default=8,
-                        help="gradient accumulation steps — effective batch = batch_size * grad_accum * num_gpus")
-    parser.add_argument("--max-iters",   type=int, default=5000,
-                        help="training iterations (5000 ~ 3-4h on 8x H200)")
+                        help="gradient accumulation steps")
+    parser.add_argument("--max-iters",   type=int, default=5000)
     parser.add_argument("--eval-iters",  type=int, default=200)
     parser.add_argument("--eval-interval", type=int, default=500)
     parser.add_argument("--lr",          type=float, default=6e-4)
@@ -43,12 +43,12 @@ def parse_args():
     parser.add_argument("--save-models", action="store_true")
     parser.add_argument("--resume",      type=str, default=None)
     parser.add_argument("--data-dir",    type=str,
-                        default=os.path.expanduser("~/datasets/openwebtext"))
+                        default="/nrs/scicompsys/Goran/openwebtext")
     return parser.parse_args()
 
 
 # ---------------------------------------------------------------------------
-# GPT-2 model — minimal clean implementation
+# GPT-2 model
 # ---------------------------------------------------------------------------
 
 class CausalSelfAttention(nn.Module):
@@ -78,12 +78,12 @@ class CausalSelfAttention(nn.Module):
 class MLP(nn.Module):
     def __init__(self, cfg):
         super().__init__()
-        self.c_fc   = nn.Linear(cfg["n_embd"], 4 * cfg["n_embd"], bias=True)
-        self.c_proj = nn.Linear(4 * cfg["n_embd"], cfg["n_embd"], bias=True)
-        self.act    = nn.GELU()
+        self.c_fc   = nn.Linear(cfg["n_embd"], 4 * cfg["n_embd"])
+        self.gelu   = nn.GELU()
+        self.c_proj = nn.Linear(4 * cfg["n_embd"], cfg["n_embd"])
 
     def forward(self, x):
-        return self.c_proj(self.act(self.c_fc(x)))
+        return self.c_proj(self.gelu(self.c_fc(x)))
 
 
 class Block(nn.Module):
@@ -100,14 +100,16 @@ class Block(nn.Module):
         return x
 
 
-class GPT2(nn.Module):
-    """GPT-2 small: 117M params, 12 layers, 12 heads, 768 embed dim."""
-    CFG = dict(n_layer=12, n_head=12, n_embd=768, block_size=1024,
-               vocab_size=50304, bias=True)  # vocab padded to nearest 64
+GPT2_CONFIG = {
+    "vocab_size": 50257, "block_size": 1024,
+    "n_layer": 12, "n_head": 12, "n_embd": 768,
+}
 
-    def __init__(self):
+
+class GPT2(nn.Module):
+    def __init__(self, cfg=None):
         super().__init__()
-        cfg = self.CFG
+        cfg = cfg or GPT2_CONFIG
         self.transformer = nn.ModuleDict(dict(
             wte  = nn.Embedding(cfg["vocab_size"], cfg["n_embd"]),
             wpe  = nn.Embedding(cfg["block_size"], cfg["n_embd"]),
@@ -116,7 +118,7 @@ class GPT2(nn.Module):
             ln_f = nn.LayerNorm(cfg["n_embd"]),
         ))
         self.lm_head = nn.Linear(cfg["n_embd"], cfg["vocab_size"], bias=False)
-        self.transformer.wte.weight = self.lm_head.weight  # weight tying
+        self.transformer.wte.weight = self.lm_head.weight
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -134,7 +136,7 @@ class GPT2(nn.Module):
                    self.transformer.wte(idx) + self.transformer.wpe(pos))
         for block in self.transformer.h:
             x = block(x)
-        x    = self.transformer.ln_f(x)
+        x      = self.transformer.ln_f(x)
         logits = self.lm_head(x)
         loss   = None
         if targets is not None:
@@ -143,30 +145,9 @@ class GPT2(nn.Module):
                 ignore_index=-1)
         return logits, loss
 
-    def num_params(self):
-        return sum(p.numel() for p in self.parameters())
-
 
 # ---------------------------------------------------------------------------
-# Dataset
-# ---------------------------------------------------------------------------
-
-class TokenDataset(Dataset):
-    def __init__(self, bin_path, seq_len):
-        self.data    = np.memmap(bin_path, dtype=np.uint16, mode="r")
-        self.seq_len = seq_len
-
-    def __len__(self):
-        return len(self.data) - self.seq_len
-
-    def __getitem__(self, idx):
-        chunk = torch.from_numpy(
-            self.data[idx:idx + self.seq_len + 1].astype(np.int64))
-        return chunk[:-1], chunk[1:]
-
-
-# ---------------------------------------------------------------------------
-# Learning rate schedule — cosine with warmup
+# LR schedule — cosine with warmup
 # ---------------------------------------------------------------------------
 
 def get_lr(it, warmup_iters, max_iters, lr, min_lr=6e-5):
@@ -179,63 +160,38 @@ def get_lr(it, warmup_iters, max_iters, lr, min_lr=6e-5):
 
 
 # ---------------------------------------------------------------------------
-# IB verification
-# ---------------------------------------------------------------------------
-
-def verify_ib_in_use():
-    import subprocess
-    ib_devs = ["mlx5_0","mlx5_1","mlx5_2","mlx5_3",
-                "mlx5_4","mlx5_6","mlx5_7","mlx5_8"]
-    print("--- IB device check ---")
-    for dev in ib_devs:
-        try:
-            r = subprocess.run(["ibv_devinfo", "-d", dev],
-                               capture_output=True, text=True, timeout=5)
-            link  = next((l.strip() for l in r.stdout.splitlines()
-                          if "link_layer" in l), "unknown")
-            ok = "InfiniBand" in link
-            print(f"  {'OK  ' if ok else 'WARN'} {dev}: {link}")
-        except Exception as e:
-            print(f"  ERR  {dev}: {e}")
-    if "mlx5_5" in os.environ.get("NCCL_IB_HCA", ""):
-        print("  ERROR: mlx5_5 (Ethernet) in NCCL_IB_HCA — remove it!")
-    else:
-        print("  OK   mlx5_5 (Ethernet) excluded")
-    print("-----------------------")
-
-
-# ---------------------------------------------------------------------------
-# Save / load
+# Checkpoint
 # ---------------------------------------------------------------------------
 
 def save_checkpoint(model, optimizer, iter_num, val_loss, config,
                     is_best=False, world_rank=0):
     if world_rank != 0:
-        return None
+        return
     model_dir = config["model_dir"]
     os.makedirs(model_dir, exist_ok=True)
-    ts     = datetime.now().strftime("%Y%m%d_%H%M%S")
-    suffix = "best" if is_best else f"iter{iter_num}"
-    path   = os.path.join(model_dir, f"gpt2_{config['mode']}_{suffix}_{ts}.pth")
+    suffix = "best" if is_best else "latest"
+    path   = os.path.join(model_dir, f"gpt2_ddp_{suffix}.pth")
     raw    = model.module if hasattr(model, "module") else model
     torch.save({
-        "iter_num":        iter_num,
-        "model_state":     raw.state_dict(),
-        "optimizer_state": optimizer.state_dict(),
-        "val_loss":        val_loss,
-        "mode":            config["mode"],
+        "iter_num":            iter_num,
+        "model_state_dict":    raw.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "val_loss":            val_loss,
     }, path)
     print(f"Checkpoint: {path}  (val_loss {val_loss:.4f})")
-    return path
 
 
 def load_checkpoint(path, model, optimizer, device):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Checkpoint not found: {path}")
     ckpt = torch.load(path, map_location=device)
-    raw  = model.module if hasattr(model, "module") else model
-    raw.load_state_dict(ckpt["model_state"])
-    optimizer.load_state_dict(ckpt["optimizer_state"])
-    print(f"Resumed iter {ckpt['iter_num']}, val_loss {ckpt['val_loss']:.4f}")
-    return ckpt["iter_num"] + 1, ckpt["val_loss"]
+    raw = model.module if hasattr(model, "module") else model
+    raw.load_state_dict(ckpt["model_state_dict"])
+    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+    start_iter  = ckpt["iter_num"] + 1
+    best_val    = ckpt.get("val_loss", float("inf"))
+    print(f"Resumed from iter {start_iter}, best val_loss {best_val:.4f}")
+    return start_iter, best_val
 
 
 # ---------------------------------------------------------------------------
@@ -243,68 +199,48 @@ def load_checkpoint(path, model, optimizer, device):
 # ---------------------------------------------------------------------------
 
 def train_func(config):
-    import ray.train
     import torch.distributed as dist
 
-    local_rank  = ray.train.get_context().get_local_rank()
-    world_rank  = ray.train.get_context().get_world_rank()
-    world_size  = ray.train.get_context().get_world_size()
+    world_rank = ray.train.get_context().get_world_rank()
+    world_size = ray.train.get_context().get_world_size()
 
-    device = torch.device(f"cuda:{local_rank}")
-    torch.cuda.set_device(device)
+    # 1. Create model on CPU, prepare_model handles device + DDP + NCCL
+    model = GPT2()
 
-    # Use bf16 on H100/H200 (Ampere+), fp16 otherwise
+    if config["mode"] == "fsdp":
+        device = ray.train.torch.get_device()
+        model = model.to(device)
+        model = FSDP(model, auto_wrap_policy=transformer_auto_wrap_policy,
+                      device_id=device)
+    else:
+        model = ray.train.torch.prepare_model(model)
+
+    # 2. AMP setup after prepare_model
+    device = ray.train.torch.get_device()
     dtype  = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     ctx    = torch.amp.autocast(device_type="cuda", dtype=dtype)
-    scaler = torch.cuda.amp.GradScaler(enabled=(dtype == torch.float16))
+    scaler = torch.amp.GradScaler("cuda", enabled=(dtype == torch.float16))
 
     if world_rank == 0:
         nccl_ib = os.environ.get("NCCL_IB_DISABLE", "1")
         backend = "InfiniBand (GPUDirect RDMA)" if nccl_ib == "0" else "Ethernet"
         print(f"Workers: {world_size} | GPU: {torch.cuda.get_device_name(device)}")
         print(f"Mode: {config['mode'].upper()} | Network: {backend} | dtype: {dtype}")
+        print(f"GPT-2 parameters: {sum(p.numel() for p in model.parameters())/1e6:.1f}M")
         print(f"Effective batch: {config['batch_size'] * config['grad_accum'] * world_size}"
-              f" sequences ({config['batch_size'] * config['grad_accum'] * world_size * config['seq_len']:,} tokens)")
-        if nccl_ib == "0":
-            verify_ib_in_use()
+              f" seqs ({config['batch_size'] * config['grad_accum'] * world_size * config['seq_len']:,} tokens)")
 
-    # Data
-    train_ds = TokenDataset(
-        os.path.join(config["data_dir"], "train.bin"), config["seq_len"])
-    val_ds   = TokenDataset(
-        os.path.join(config["data_dir"], "val.bin"),   config["seq_len"])
+    # 3. Get Ray Data shards
+    train_shard = ray.train.get_dataset_shard("train")
+    val_shard = ray.train.get_dataset_shard("val")
 
-    train_sampler = DistributedSampler(train_ds, num_replicas=world_size,
-                                        rank=world_rank, shuffle=True)
-    train_loader  = DataLoader(train_ds, batch_size=config["batch_size"],
-                               sampler=train_sampler, num_workers=4,
-                               pin_memory=True, persistent_workers=True)
-    val_loader    = DataLoader(val_ds, batch_size=config["batch_size"],
-                               num_workers=2, pin_memory=True)
-
-    # Model
-    model = GPT2().to(device)
-
-    if world_rank == 0:
-        print(f"GPT-2 parameters: {model.num_params()/1e6:.1f}M")
-
-    if config["mode"] == "fsdp":
-        model = FSDP(
-            model,
-            auto_wrap_policy=transformer_auto_wrap_policy,
-            device_id=device,
-            # AllGather happens over IB before each forward pass per shard
-        )
-    else:
-        model = DDP(model, device_ids=[local_rank])
-        # AllReduce happens over IB after backward pass
-
+    # 4. Optimizer
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config["lr"],
         betas=(0.9, 0.95), weight_decay=0.1)
 
-    start_iter = 0
     best_val   = float("inf")
+    start_iter = 0
 
     if config.get("resume_checkpoint") and world_rank == 0:
         start_iter, best_val = load_checkpoint(
@@ -318,33 +254,39 @@ def train_func(config):
         start_iter = int(si.item())
         best_val   = bv.item()
 
-    # Training loop
-    train_iter   = iter(train_loader)
-    t0           = time.time()
+    t0         = time.time()
     tokens_total = 0
 
+    # 5. Training loop — iterate over Ray Data batches
+    train_iter = iter(train_shard.iter_torch_batches(
+        batch_size=config["batch_size"],
+        dtypes=torch.long,
+        local_shuffle_buffer_size=config["batch_size"] * 16,
+    ))
+
     for it in range(start_iter, config["max_iters"]):
-        # LR schedule
         lr = get_lr(it, config["warmup_iters"], config["max_iters"], config["lr"])
         for pg in optimizer.param_groups:
             pg["lr"] = lr
 
-        # Gradient accumulation
         optimizer.zero_grad(set_to_none=True)
         accum_loss = 0.0
 
         for micro in range(config["grad_accum"]):
             try:
-                x, y = next(train_iter)
+                batch = next(train_iter)
             except StopIteration:
-                train_sampler.set_epoch(it)
-                train_iter = iter(train_loader)
-                x, y = next(train_iter)
+                train_iter = iter(train_shard.iter_torch_batches(
+                    batch_size=config["batch_size"],
+                    dtypes=torch.long,
+                    local_shuffle_buffer_size=config["batch_size"] * 16,
+                ))
+                batch = next(train_iter)
 
-            x = x.to(device, non_blocking=True)
-            y = y.to(device, non_blocking=True)
+            input_ids = batch["input_ids"].to(device, non_blocking=True)
+            x = input_ids[:, :-1]
+            y = input_ids[:, 1:]
 
-            # Only sync gradients on the last accumulation step
             sync = (micro == config["grad_accum"] - 1)
             ctx_sync = model.no_sync() if not sync and hasattr(model, "no_sync") \
                        else contextlib.nullcontext()
@@ -352,7 +294,7 @@ def train_func(config):
             with ctx_sync:
                 with ctx:
                     _, loss = model(x, y)
-                    loss    = loss / config["grad_accum"]
+                    loss = loss / config["grad_accum"]
                 scaler.scale(loss).backward()
                 accum_loss += loss.item()
 
@@ -363,10 +305,9 @@ def train_func(config):
         scaler.step(optimizer)
         scaler.update()
 
-        # Logging
         if it % 50 == 0 and world_rank == 0:
-            dt       = time.time() - t0
-            tok_sec  = tokens_total / dt
+            dt = time.time() - t0
+            tok_sec = tokens_total / dt
             print(f"iter {it:5d} | loss {accum_loss:.4f} | "
                   f"lr {lr:.2e} | {tok_sec/1e3:.1f}K tok/s | "
                   f"{dt:.0f}s elapsed")
@@ -375,66 +316,81 @@ def train_func(config):
         if it % config["eval_interval"] == 0 and it > 0:
             model.eval()
             val_losses = []
+            val_iter = iter(val_shard.iter_torch_batches(
+                batch_size=config["batch_size"], dtypes=torch.long))
             with torch.no_grad():
-                for vi, (vx, vy) in enumerate(val_loader):
-                    if vi >= config["eval_iters"]:
+                for vi in range(config["eval_iters"]):
+                    try:
+                        vbatch = next(val_iter)
+                    except StopIteration:
                         break
-                    vx = vx.to(device, non_blocking=True)
-                    vy = vy.to(device, non_blocking=True)
+                    input_ids = vbatch["input_ids"].to(device, non_blocking=True)
+                    vx = input_ids[:, :-1]
+                    vy = input_ids[:, 1:]
                     with ctx:
                         _, vloss = model(vx, vy)
                     val_losses.append(vloss.item())
-            val_loss = float(np.mean(val_losses))
+            val_loss = float(np.mean(val_losses)) if val_losses else float("inf")
             model.train()
 
             if world_rank == 0:
                 tok_sec = tokens_total / (time.time() - t0)
-                print(f"  val_loss {val_loss:.4f} | "
-                      f"throughput {tok_sec/1e3:.1f}K tok/s")
+                print(f"  val_loss {val_loss:.4f} | {tok_sec/1e3:.1f}K tok/s")
 
-            if config.get("save_models") and val_loss < best_val:
-                best_val = val_loss
+            if config.get("save_models"):
                 save_checkpoint(model, optimizer, it, val_loss,
-                                config, is_best=True,
-                                world_rank=world_rank)
+                                config, is_best=False, world_rank=world_rank)
+                if val_loss < best_val:
+                    best_val = val_loss
+                    save_checkpoint(model, optimizer, it, val_loss,
+                                    config, is_best=True, world_rank=world_rank)
 
             ray.train.report({
-                "iter":     it,
-                "val_loss": val_loss,
-                "tok_sec":  tokens_total / (time.time() - t0),
+                "iter": it, "val_loss": val_loss,
+                "tok_sec": tokens_total / (time.time() - t0),
                 "best_val": best_val,
-                "mode":     config["mode"],
             })
 
-    # Final checkpoint
     if config.get("save_models"):
         save_checkpoint(model, optimizer, config["max_iters"],
-                        best_val, config, is_best=False,
-                        world_rank=world_rank)
+                        best_val, config, is_best=False, world_rank=world_rank)
 
     if world_rank == 0:
-        elapsed  = time.time() - t0
-        tok_sec  = tokens_total / elapsed
+        elapsed = time.time() - t0
+        tok_sec = tokens_total / elapsed
         print(f"\nDone. {tokens_total/1e9:.2f}B tokens | "
               f"{tok_sec/1e3:.1f}K tok/s avg | {elapsed/3600:.1f}h")
-        print(f"Best val loss: {best_val:.4f}")
 
 
 def main():
     args = parse_args()
 
-    train_bin = os.path.join(args.data_dir, "train.bin")
-    if not os.path.exists(train_bin):
-        print(f"ERROR: {train_bin} not found — run the dataset prep step first")
+    data_dir = args.data_dir
+    train_dir = os.path.join(data_dir, "train")
+    if not os.path.isdir(train_dir):
+        print(f"ERROR: {train_dir} not found — run prepare_openwebtext.sh first")
         return
 
     model_dir = os.path.join(os.path.abspath(os.getcwd()), "models")
 
     ray.init(address="auto")
     nccl_ib = os.environ.get("NCCL_IB_DISABLE", "1")
-    backend = "InfiniBand" if nccl_ib == "0" else "Ethernet"
     print(f"Ray: {ray.available_resources()}")
-    print(f"Mode: {args.mode.upper()} | Network: {backend}")
+    print(f"Mode: {args.mode.upper()} | Network: "
+          f"{'InfiniBand' if nccl_ib == '0' else 'Ethernet'}")
+
+    # Load tokenized data as Ray Datasets from parquet
+    print("Loading datasets...")
+    train_files = sorted(glob.glob(os.path.join(train_dir, "*.parquet")))
+    val_files = sorted(glob.glob(os.path.join(data_dir, "val", "*.parquet")))
+    if not train_files:
+        print(f"ERROR: No parquet files in {train_dir}")
+        return
+    print(f"Found {len(train_files)} train shards, {len(val_files)} val shards")
+
+    train_ds = ray.data.read_parquet(train_files)
+    val_ds = ray.data.read_parquet(val_files)
+
     print(f"Max iters: {args.max_iters} | "
           f"Effective batch: {args.batch_size * args.grad_accum * args.num_gpus} seqs "
           f"({args.batch_size * args.grad_accum * args.num_gpus * args.seq_len:,} tokens)")
@@ -449,27 +405,31 @@ def main():
     trainer = TorchTrainer(
         train_loop_per_worker=train_func,
         train_loop_config={
-            "mode":              args.mode,
-            "batch_size":        args.batch_size,
-            "seq_len":           args.seq_len,
-            "grad_accum":        args.grad_accum,
-            "max_iters":         args.max_iters,
-            "eval_iters":        args.eval_iters,
-            "eval_interval":     args.eval_interval,
-            "lr":                args.lr,
-            "warmup_iters":      args.warmup_iters,
-            "num_nodes":         args.num_nodes,
+            "mode":          args.mode,
+            "batch_size":    args.batch_size,
+            "seq_len":       args.seq_len,
+            "grad_accum":    args.grad_accum,
+            "max_iters":     args.max_iters,
+            "eval_iters":    args.eval_iters,
+            "eval_interval": args.eval_interval,
+            "lr":            args.lr,
+            "warmup_iters":  args.warmup_iters,
+            "num_nodes":     args.num_nodes,
             "save_models":       args.save_models,
             "resume_checkpoint": args.resume,
-            "data_dir":          args.data_dir,
             "model_dir":         model_dir,
         },
+        datasets={"train": train_ds, "val": val_ds},
         scaling_config=scaling_config,
-        run_config=run_config)
+        run_config=run_config,
+    )
 
     result = trainer.fit()
     if result and result.metrics:
-        print(f"Best val loss: {result.metrics.get('best_val', 'N/A'):.4f}")
+        best_val = result.metrics.get('best_val', None)
+        if best_val is not None:
+            print(f"Best val loss: {best_val:.4f}")
+        print(f"Final iter: {result.metrics.get('iter', 'N/A')}")
     ray.shutdown()
 
 

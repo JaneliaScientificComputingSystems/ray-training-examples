@@ -14,7 +14,6 @@ from torch.utils.data import DataLoader, DistributedSampler
 from ray.train import ScalingConfig, RunConfig
 from ray.train.torch import TorchTrainer
 from torch.nn.parallel import DistributedDataParallel as DDP
-from datetime import datetime
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -120,22 +119,15 @@ def save_checkpoint(model, optimizer, epoch, train_acc, test_acc,
         return None
     model_dir = config["model_dir"]
     os.makedirs(model_dir, exist_ok=True)
-    ts     = datetime.now().strftime("%Y%m%d_%H%M%S")
-    suffix = "best" if is_best else "final"
-    path   = os.path.join(model_dir, f"cifar10_resnet18_{suffix}_{ts}.pth")
+    # Always save latest (overwritten each epoch) + best (only when improved)
+    suffix = "best" if is_best else "latest"
+    path   = os.path.join(model_dir, f"cifar10_resnet18_{suffix}.pth")
     torch.save({
         "epoch": epoch,
         "model_state_dict":     model.module.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "train_accuracy":       train_acc,
         "test_accuracy":        test_acc,
-        "model_config":  {"num_classes": 10, "architecture": "ResNet18"},
-        "training_config": {
-            "batch_size": config["batch_size"],
-            "lr":         config["lr"],
-            "epochs":     config["epochs"],
-            "timestamp":  ts,
-        },
     }, path)
     print(f"Checkpoint saved: {path}  (test acc {test_acc:.2f}%)")
     return path
@@ -155,12 +147,13 @@ def train_func(config):
     import ray.train
     import torch.distributed as dist
 
-    local_rank  = ray.train.get_context().get_local_rank()
     world_rank  = ray.train.get_context().get_world_rank()
     world_size  = ray.train.get_context().get_world_size()
 
-    device = torch.device(f"cuda:{local_rank}")
-    torch.cuda.set_device(device)
+    # 1. Create model on CPU, let prepare_model handle device + DDP
+    model = ResNet18(num_classes=10)
+    model = ray.train.torch.prepare_model(model)
+    device = ray.train.torch.get_device()
 
     if world_rank == 0:
         print(f"Cluster: {world_size} workers across {config['num_nodes']} nodes")
@@ -179,9 +172,6 @@ def train_func(config):
 
     trainloader, testloader, train_sampler = get_cifar10_dataloaders(
         config["batch_size"], world_size, world_rank)
-
-    model     = ResNet18(num_classes=10).to(device)
-    model     = DDP(model, device_ids=[local_rank])
     optimizer = torch.optim.Adam(model.parameters(),
                                   lr=config["lr"], weight_decay=1e-4)
     criterion = nn.CrossEntropyLoss()
@@ -248,10 +238,13 @@ def train_func(config):
         test_loss /= len(testloader)
         test_acc   = 100. * test_correct / test_total
 
-        if config.get("save_models") and test_acc > best_test_acc:
-            best_test_acc = test_acc
+        if config.get("save_models"):
             save_checkpoint(model, optimizer, epoch, train_acc, test_acc,
-                            config, is_best=True, world_rank=world_rank)
+                            config, is_best=False, world_rank=world_rank)
+            if test_acc > best_test_acc:
+                best_test_acc = test_acc
+                save_checkpoint(model, optimizer, epoch, train_acc, test_acc,
+                                config, is_best=True, world_rank=world_rank)
 
         ray.train.report({
             "epoch": epoch, "train_loss": train_loss, "train_acc": train_acc,
@@ -261,11 +254,6 @@ def train_func(config):
 
         if world_rank == 0:
             print(f"Epoch {epoch}: train={train_acc:.2f}%  test={test_acc:.2f}%")
-
-    if config.get("save_models"):
-        save_checkpoint(model, optimizer, config["epochs"] - 1,
-                        train_acc, test_acc, config,
-                        is_best=False, world_rank=world_rank)
 
     if world_rank == 0:
         print(f"\nTraining complete. Best test accuracy: {best_test_acc:.2f}%")

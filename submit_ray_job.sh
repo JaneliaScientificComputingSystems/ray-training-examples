@@ -117,8 +117,8 @@ cat << EOF | bsub
 #BSUB -q ${QUEUE_NAME}
 #BSUB -gpu "num=${GPUS_PER_NODE}:mode=exclusive_process"
 #BSUB -R "span[ptile=${CPUS_PER_NODE}]"
-#BSUB -o ${JOB_NAME}_%J.out
-#BSUB -e ${JOB_NAME}_%J.err
+#BSUB -o ../output/${JOB_NAME}_%J.out
+#BSUB -e ../output/${JOB_NAME}_%J.err
 #BSUB -W ${WALLTIME}
 
 if [ -n "${VENV_PATH}" ]; then source ${VENV_PATH}/bin/activate; fi
