@@ -201,9 +201,14 @@ Trains ResNet-50 (25.6M parameters) using DDP with large-batch SGD (momentum 0.9
 
 ImageNet-1K is available at `/nrs/scicompsys/Goran/imagenet` (shared NFS, ~138 GB). Training scripts use this by default — no setup required.
 
-To prepare your own copy (one-time, ~15 min, requires [HuggingFace access to ILSVRC/imagenet-1k](https://huggingface.co/datasets/ILSVRC/imagenet-1k)):
+To prepare your own copy (one-time, ~15 min):
+
+1. Create a [HuggingFace](https://huggingface.co) account
+2. Accept the license at [ILSVRC/imagenet-1k](https://huggingface.co/datasets/ILSVRC/imagenet-1k)
+3. Create a token at [Settings > Tokens](https://huggingface.co/settings/tokens)
 
 ```bash
+export HF_TOKEN="hf_..."
 ./prepare_imagenet.sh --data-dir=/your/path
 ```
 

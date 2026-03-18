@@ -5,6 +5,12 @@
 # Downloads ~138 GB to /nrs/scicompsys/Goran/imagenet
 # Requires HuggingFace token with access to ILSVRC/imagenet-1k
 #
+# Before running:
+#   1. Create a HuggingFace account at https://huggingface.co
+#   2. Accept the license at https://huggingface.co/datasets/ILSVRC/imagenet-1k
+#   3. Create a token at https://huggingface.co/settings/tokens
+#   4. Export it:  export HF_TOKEN="hf_..."
+#
 # Usage:
 #   ./prepare_imagenet.sh [--venv=PATH] [--data-dir=PATH]
 #
@@ -24,6 +30,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [ -z "$HF_TOKEN" ]; then
+    echo "ERROR: HF_TOKEN is not set."
+    echo ""
+    echo "ImageNet-1K is a gated dataset. To download it:"
+    echo "  1. Create a HuggingFace account at https://huggingface.co"
+    echo "  2. Accept the license at https://huggingface.co/datasets/ILSVRC/imagenet-1k"
+    echo "  3. Create a token at https://huggingface.co/settings/tokens"
+    echo "  4. Run:  export HF_TOKEN=\"hf_...\""
+    exit 1
+fi
+
 echo "================================================================"
 echo "ImageNet-1K (ILSVRC2012) Download"
 echo "================================================================"
@@ -41,6 +58,7 @@ cat << EOF | bsub
 #BSUB -W 24:00
 
 source ${VENV_PATH}/bin/activate
+export HF_TOKEN="${HF_TOKEN}"
 
 mkdir -p ${DATA_DIR}
 
