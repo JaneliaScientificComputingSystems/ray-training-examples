@@ -141,7 +141,7 @@ class GPT2(nn.Module):
         loss   = None
         if targets is not None:
             loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)), targets.view(-1),
+                logits.reshape(-1, logits.size(-1)), targets.reshape(-1),
                 ignore_index=-1)
         return logits, loss
 
