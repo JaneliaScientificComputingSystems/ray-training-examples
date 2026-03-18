@@ -107,8 +107,17 @@ tar -xzf cifar-10-python.tar.gz && rm cifar-10-python.tar.gz
 
 ### Train
 
+**Quick validation (~2 min on 16 GPUs):** 10 epochs is enough to confirm multi-node training works and see loss converge. Expect ~80% accuracy.
+
+**Full training (~5 min on 16 GPUs):** 50 epochs reaches ~89-91% accuracy — diminishing returns beyond that on CIFAR-10.
+
 ```bash
-# H200 — 2 nodes, 16 GPUs
+# Validation run — 10 epochs
+./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
+    --script=cifar10_distributed_training.py -- \
+    --num-gpus=16 --num-nodes=2 --epochs=10 --batch-size=256 --save-models
+
+# Full run — 50 epochs
 ./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
     --script=cifar10_distributed_training.py -- \
     --num-gpus=16 --num-nodes=2 --epochs=50 --batch-size=256 --save-models
@@ -158,12 +167,24 @@ pip install datasets tiktoken
 
 ### Train
 
+GPT-2 uses iteration count, not epochs. Each iteration processes `batch_size × grad_accum × num_gpus` sequences (1024 tokens each). With the defaults below, effective batch = 1,048,576 tokens/iter.
+
+**Quick validation (~45 min on 16 GPUs):** 2000 iters processes ~2B tokens — enough to verify the pipeline, see loss drop, and confirm IB throughput.
+
+**Full training (~6h on 16 GPUs):** 50K iters processes ~50B tokens (~5 passes over OpenWebText). Expect perplexity ~29 at convergence.
+
 ```bash
-# DDP — 2 nodes, 16 GPUs, ~45 min
+# Validation run — 2000 iters
 ./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
     --script=gpt2_distributed_training.py -- \
     --num-gpus=16 --num-nodes=2 --mode=ddp \
     --max-iters=2000 --batch-size=8 --grad-accum=8 --save-models
+
+# Full run — 50K iters
+./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
+    --script=gpt2_distributed_training.py -- \
+    --num-gpus=16 --num-nodes=2 --mode=ddp \
+    --max-iters=50000 --batch-size=8 --grad-accum=8 --save-models
 
 # FSDP mode (for models that don't fit in single GPU memory)
 ./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
@@ -216,14 +237,18 @@ export HF_TOKEN="hf_..."
 
 ### Train
 
+**Quick validation (~20 min on 16 GPUs):** 3 epochs is enough to confirm the data pipeline works, see loss drop, and measure throughput. Expect ~25-30% top-1.
+
+**Full training (~3h on 16 GPUs):** 90 epochs reaches ~76%+ top-1 accuracy — the standard ResNet-50 target used in MLPerf benchmarks.
+
 ```bash
-# H200 — 2 nodes, 16 GPUs, 10 epochs (~1h)
+# Validation run — 3 epochs
 ./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
     --job-name=resnet50 \
     --script=imagenet_distributed_training.py -- \
-    --num-gpus=16 --num-nodes=2 --epochs=10 --batch-size=128 --save-models
+    --num-gpus=16 --num-nodes=2 --epochs=3 --batch-size=128 --save-models
 
-# Full training — 90 epochs
+# Full run — 90 epochs
 ./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
     --job-name=resnet50 \
     --script=imagenet_distributed_training.py -- \
