@@ -48,13 +48,14 @@ pip install datasets tiktoken
 |------|-------------|
 | `submit_ray_job.sh` | LSF job submission — auto-configures NCCL per queue |
 | `cifar10_distributed_training.py` | ResNet-18 on CIFAR-10 — multi-node DDP |
-| `image_classifier.py` | CIFAR-10 inference with trained checkpoints |
 | `prepare_openwebtext.sh` | Downloads and tokenizes OpenWebText for GPT-2 |
 | `gpt2_distributed_training.py` | GPT-2 small (117M) — DDP and FSDP modes |
-| `gpt2_eval.py` | Perplexity evaluation on OpenWebText val set |
-| `gpt2_generate.py` | Text generation — interactive, batch, single-prompt |
 | `prepare_imagenet.sh` | Downloads ImageNet-1K and builds Arrow cache |
 | `imagenet_distributed_training.py` | ResNet-50 on ImageNet-1K — distributed benchmark |
+| `image_classifier.py` | CIFAR-10 inference with trained checkpoints |
+| `gpt2_eval.py` | GPT-2 perplexity evaluation on val set |
+| `gpt2_generate.py` | GPT-2 text generation from checkpoints |
+| `imagenet_classifier.py` | ImageNet inference with trained checkpoints |
 
 ---
 
@@ -142,7 +143,7 @@ Trains GPT-2 small (117M parameters, 12 layers, 768 hidden dim, 12 attention hea
 - Training logs with loss, learning rate, and tokens/sec throughput
 - Periodic validation loss (perplexity) evaluation
 - Model checkpoints (`.pth` files) saved to `./models/`
-- Trained models can be evaluated with `gpt2_eval.py` (perplexity) or used for text generation with `gpt2_generate.py`
+- Trained models can be evaluated with `gpt2_eval.py` or used for text generation with `gpt2_generate.py`
 
 ### Data
 
@@ -174,8 +175,9 @@ pip install datasets tiktoken
 ### Evaluate & Generate
 
 ```bash
-python gpt2_eval.py --model ./models/gpt2_ddp_best_*.pth --num-batches 200
-python gpt2_generate.py --model ./models/gpt2_ddp_best_*.pth --interactive
+python gpt2_eval.py --model ./models/gpt2_ddp_best.pth --num-batches 200
+python gpt2_generate.py --model ./models/gpt2_ddp_best.pth --prompt "The brain"
+python gpt2_generate.py --model ./models/gpt2_ddp_best.pth --interactive
 ```
 
 ---
@@ -232,6 +234,13 @@ export HF_TOKEN="hf_..."
     --job-name=resnet50 \
     --script=imagenet_distributed_training.py -- \
     --num-gpus=64 --num-nodes=8 --epochs=90 --batch-size=64 --save-models
+```
+
+### Inference
+
+```bash
+python imagenet_classifier.py --model ./models/resnet50_imagenet_best.pth --test
+python imagenet_classifier.py --model ./models/resnet50_imagenet_best.pth --image photo.jpg
 ```
 
 ### Batch size reference

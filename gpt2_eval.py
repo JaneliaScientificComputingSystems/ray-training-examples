@@ -1,109 +1,205 @@
 #!/usr/bin/env python3
 """
-GPT-2 perplexity evaluation on OpenWebText val set.
-Runs on a single GPU — no distributed setup needed.
-Reports per-token perplexity and bits-per-character.
+GPT-2 perplexity evaluation on OpenWebText val set (parquet shards).
 
 Usage:
-    python gpt2_eval.py --model ./models/gpt2_ddp_best_YYYYMMDD.pth
-    python gpt2_eval.py --model ./models/gpt2_fsdp_best_YYYYMMDD.pth --num-batches 500
+    python gpt2_eval.py --model ./models/gpt2_ddp_best.pth
+    python gpt2_eval.py --model ./models/gpt2_ddp_best.pth --num-batches 200
 """
 import argparse
-import os
+import glob
 import math
+import os
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
+import pyarrow.parquet as pq
 
-# Re-use model definition from training script
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location(
-    "gpt2_train", os.path.join(os.path.dirname(__file__),
-                               "gpt2_distributed_training.py"))
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-GPT2        = mod.GPT2
-TokenDataset = mod.TokenDataset
+# ---------------------------------------------------------------------------
+# Model architecture — must match gpt2_distributed_training.py
+# ---------------------------------------------------------------------------
+
+GPT2_CONFIG = {
+    "vocab_size": 50257, "block_size": 1024,
+    "n_layer": 12, "n_head": 12, "n_embd": 768,
+}
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model",      required=True,
-                        help="Path to .pth checkpoint")
-    parser.add_argument("--data-dir",   default=os.path.expanduser(
-                                            "~/datasets/openwebtext"))
-    parser.add_argument("--seq-len",    type=int, default=1024)
-    parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--num-batches", type=int, default=None,
-                        help="Limit evaluation batches (default: full val set)")
-    parser.add_argument("--device",     default="auto")
-    return parser.parse_args()
+class CausalSelfAttention(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.c_attn = nn.Linear(cfg["n_embd"], 3 * cfg["n_embd"], bias=True)
+        self.c_proj = nn.Linear(cfg["n_embd"], cfg["n_embd"], bias=True)
+        self.n_head = cfg["n_head"]
+        self.n_embd = cfg["n_embd"]
+        self.register_buffer("bias",
+            torch.tril(torch.ones(cfg["block_size"], cfg["block_size"]))
+            .view(1, 1, cfg["block_size"], cfg["block_size"]))
 
+    def forward(self, x):
+        B, T, C = x.size()
+        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
+        att = torch.softmax(att, dim=-1)
+        return self.c_proj((att @ v).transpose(1, 2).contiguous().view(B, T, C))
+
+
+class MLP(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.c_fc = nn.Linear(cfg["n_embd"], 4 * cfg["n_embd"])
+        self.gelu = nn.GELU(approximate="tanh")
+        self.c_proj = nn.Linear(4 * cfg["n_embd"], cfg["n_embd"])
+
+    def forward(self, x):
+        return self.c_proj(self.gelu(self.c_fc(x)))
+
+
+class Block(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(cfg["n_embd"])
+        self.attn = CausalSelfAttention(cfg)
+        self.ln_2 = nn.LayerNorm(cfg["n_embd"])
+        self.mlp = MLP(cfg)
+
+    def forward(self, x):
+        x = x + self.attn(self.ln_1(x))
+        return x + self.mlp(self.ln_2(x))
+
+
+class GPT2(nn.Module):
+    def __init__(self, cfg=None):
+        super().__init__()
+        cfg = cfg or GPT2_CONFIG
+        self.transformer = nn.ModuleDict(dict(
+            wte=nn.Embedding(cfg["vocab_size"], cfg["n_embd"]),
+            wpe=nn.Embedding(cfg["block_size"], cfg["n_embd"]),
+            drop=nn.Dropout(0.0),
+            h=nn.ModuleList([Block(cfg) for _ in range(cfg["n_layer"])]),
+            ln_f=nn.LayerNorm(cfg["n_embd"]),
+        ))
+        self.lm_head = nn.Linear(cfg["n_embd"], cfg["vocab_size"], bias=False)
+        self.transformer.wte.weight = self.lm_head.weight
+
+    def forward(self, idx, targets=None):
+        B, T = idx.shape
+        pos = torch.arange(T, device=idx.device)
+        x = self.transformer.drop(
+            self.transformer.wte(idx) + self.transformer.wpe(pos))
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x)
+        loss = None
+        if targets is not None:
+            loss = nn.functional.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1))
+        return logits, loss
+
+
+# ---------------------------------------------------------------------------
+# Val dataset from parquet
+# ---------------------------------------------------------------------------
+
+class ValDataset(torch.utils.data.Dataset):
+    """Reads tokenized sequences from parquet val shards."""
+    def __init__(self, data_dir, seq_len=1024):
+        val_dir = os.path.join(data_dir, "val")
+        files = sorted(glob.glob(os.path.join(val_dir, "*.parquet")))
+        if not files:
+            raise FileNotFoundError(f"No parquet files in {val_dir}")
+        rows = []
+        for f in files:
+            table = pq.read_table(f, columns=["input_ids"])
+            for batch in table.to_batches():
+                for row in batch.column("input_ids"):
+                    tokens = row.as_py()
+                    if len(tokens) >= seq_len + 1:
+                        rows.append(tokens[:seq_len + 1])
+        self.data = np.array(rows, dtype=np.int64)
+        self.seq_len = seq_len
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        tokens = self.data[idx]
+        x = torch.tensor(tokens[:self.seq_len], dtype=torch.long)
+        y = torch.tensor(tokens[1:self.seq_len + 1], dtype=torch.long)
+        return x, y
+
+
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
 
 def load_model(path, device):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Checkpoint not found: {path}")
-    ckpt = torch.load(path, map_location=device)
-
-    model = GPT2().to(device)
-    # Strip DDP/FSDP wrapper prefix if present
-    state = ckpt["model_state"]
-    state = {k.replace("module.", ""): v for k, v in state.items()}
-    model.load_state_dict(state, strict=False)
-    model.eval()
-
-    mode     = ckpt.get("mode", "unknown")
+    ckpt = torch.load(path, map_location=device, weights_only=True)
+    model = GPT2()
+    model.load_state_dict(ckpt["model_state_dict"])
+    model.to(device).eval()
     val_loss = ckpt.get("val_loss", float("nan"))
-    iter_num = ckpt.get("iter_num", "unknown")
+    iter_num = ckpt.get("iter_num", "?")
     print(f"Loaded: {path}")
-    print(f"  Training mode:  {mode.upper()}")
-    print(f"  Saved at iter:  {iter_num}")
-    print(f"  Saved val loss: {val_loss:.4f}  "
+    print(f"  Iter: {iter_num}  |  Saved val loss: {val_loss:.4f}  "
           f"(ppl {math.exp(val_loss):.1f})")
     return model
 
 
-def evaluate(model, data_dir, seq_len, batch_size, num_batches, device):
-    val_bin = os.path.join(data_dir, "val.bin")
-    if not os.path.exists(val_bin):
-        raise FileNotFoundError(f"val.bin not found at {val_bin}")
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", required=True, help="Path to .pth checkpoint")
+    parser.add_argument("--data-dir", default="/nrs/scicompsys/Goran/openwebtext")
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--num-batches", type=int, default=None,
+                        help="Limit eval batches (default: full val set)")
+    parser.add_argument("--device", default="auto")
+    args = parser.parse_args()
 
-    dataset = TokenDataset(val_bin, seq_len)
-    loader  = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, shuffle=False,
+    device = torch.device(
+        "cuda" if torch.cuda.is_available() else "cpu"
+    ) if args.device == "auto" else torch.device(args.device)
+
+    model = load_model(args.model, device)
+    dataset = ValDataset(args.data_dir)
+    loader = torch.utils.data.DataLoader(
+        dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=2, pin_memory=True)
 
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    ctx   = torch.amp.autocast(device_type="cuda", dtype=dtype) \
-            if device.type == "cuda" else torch.no_grad()
+    use_amp = device.type == "cuda"
 
-    losses      = []
+    losses = []
     total_tokens = 0
-
-    print(f"\nEvaluating on val set "
-          f"({'full' if num_batches is None else str(num_batches)+' batches'})...")
+    label = "full val set" if args.num_batches is None \
+            else f"{args.num_batches} batches"
+    print(f"\nEvaluating ({label})...")
 
     with torch.no_grad():
         for i, (x, y) in enumerate(loader):
-            if num_batches and i >= num_batches:
+            if args.num_batches and i >= args.num_batches:
                 break
             x = x.to(device, non_blocking=True)
             y = y.to(device, non_blocking=True)
-            with ctx:
+            if use_amp:
+                with torch.amp.autocast(device_type="cuda", dtype=dtype):
+                    _, loss = model(x, y)
+            else:
                 _, loss = model(x, y)
             losses.append(loss.item())
             total_tokens += x.numel()
             if (i + 1) % 50 == 0:
-                running_ppl = math.exp(sum(losses) / len(losses))
-                print(f"  batch {i+1:4d} | "
-                      f"running ppl {running_ppl:.2f}")
+                print(f"  batch {i+1:4d} | running ppl "
+                      f"{math.exp(sum(losses)/len(losses)):.2f}")
 
     mean_loss = sum(losses) / len(losses)
-    ppl       = math.exp(mean_loss)
-    # bits per character: loss (nats) / ln(2) / chars_per_token
-    # GPT-2 BPE averages ~4 chars/token on English text
-    bpc       = mean_loss / math.log(2) / 4.0
+    ppl = math.exp(mean_loss)
+    bpc = mean_loss / math.log(2) / 4.0
 
     print(f"\n{'='*50}")
     print(f"Val loss:    {mean_loss:.4f}")
@@ -111,25 +207,6 @@ def evaluate(model, data_dir, seq_len, batch_size, num_batches, device):
     print(f"Bits/char:   {bpc:.3f}  (estimate, ~4 chars/token)")
     print(f"Tokens eval: {total_tokens:,}")
     print(f"{'='*50}")
-    print(f"\nReference perplexities (OpenWebText val):")
-    print(f"  GPT-2 small  (117M) trained to convergence: ~29 ppl")
-    print(f"  GPT-2 medium (345M) trained to convergence: ~24 ppl")
-    print(f"  Random baseline (50K vocab):               ~50000 ppl")
-    return mean_loss, ppl
-
-
-def main():
-    args = parse_args()
-
-    if args.device == "auto":
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    else:
-        device = torch.device(args.device)
-    print(f"Device: {device}")
-
-    model = load_model(args.model, device)
-    evaluate(model, args.data_dir, args.seq_len,
-             args.batch_size, args.num_batches, device)
 
 
 if __name__ == "__main__":
