@@ -49,7 +49,7 @@ class MLP(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.c_fc = nn.Linear(cfg["n_embd"], 4 * cfg["n_embd"])
-        self.gelu = nn.GELU(approximate="tanh")
+        self.gelu = nn.GELU()
         self.c_proj = nn.Linear(4 * cfg["n_embd"], cfg["n_embd"])
 
     def forward(self, x):

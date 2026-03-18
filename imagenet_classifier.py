@@ -8,7 +8,6 @@ Usage:
 """
 import argparse
 import io
-import json
 import os
 import torch
 import torch.nn as nn

@@ -170,7 +170,8 @@ def save_checkpoint(model, optimizer, iter_num, val_loss, config,
     model_dir = config["model_dir"]
     os.makedirs(model_dir, exist_ok=True)
     suffix = "best" if is_best else "latest"
-    path   = os.path.join(model_dir, f"gpt2_ddp_{suffix}.pth")
+    mode   = config.get("mode", "ddp")
+    path   = os.path.join(model_dir, f"gpt2_{mode}_{suffix}.pth")
     raw    = model.module if hasattr(model, "module") else model
     torch.save({
         "iter_num":            iter_num,
@@ -301,6 +302,7 @@ def train_func(config):
         tokens_total += (config["batch_size"] * config["grad_accum"]
                          * config["seq_len"] * world_size)
 
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(optimizer)
         scaler.update()

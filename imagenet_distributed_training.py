@@ -357,7 +357,7 @@ def main():
     train_ds = train_ds.map_batches(transform_train_batch, batch_format="pandas")
     val_ds = val_ds.map_batches(transform_val_batch, batch_format="pandas")
 
-    print(f"Train: {train_ds.count():,} images | Val: {val_ds.count():,} images")
+    print(f"Train: {len(train_files)} shards | Val: {len(val_files)} shards")
 
     scaling_config = ScalingConfig(
         num_workers=args.num_gpus,

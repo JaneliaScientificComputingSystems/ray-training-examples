@@ -13,7 +13,6 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, DistributedSampler
 from ray.train import ScalingConfig, RunConfig
 from ray.train.torch import TorchTrainer
-from torch.nn.parallel import DistributedDataParallel as DDP
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -206,15 +205,15 @@ def train_func(config):
             targets = targets.to(device, non_blocking=True)
 
             optimizer.zero_grad()
-            loss = criterion(model(data), targets)
+            output = model(data)
+            loss = criterion(output, targets)
             loss.backward()
             # AllReduce gradient sync — NCCL routes over IB or Ethernet
             optimizer.step()
 
             epoch_loss += loss.item()
-            preds       = model(data).argmax(1)
             total      += targets.size(0)
-            correct    += preds.eq(targets).sum().item()
+            correct    += output.argmax(1).eq(targets).sum().item()
 
             if batch_idx % 50 == 0 and world_rank == 0:
                 print(f"  Epoch {epoch} [{batch_idx}/{len(trainloader)}] "
