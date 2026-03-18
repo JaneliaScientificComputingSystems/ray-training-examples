@@ -50,7 +50,7 @@ echo ""
 
 python3 - << 'PYEOF'
 import os
-os.environ["HF_TOKEN"] = "***REMOVED***"
+os.environ["HF_TOKEN"] = os.environ.get("HF_TOKEN", "")
 
 from huggingface_hub import snapshot_download
 
