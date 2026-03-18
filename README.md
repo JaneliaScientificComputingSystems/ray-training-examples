@@ -576,10 +576,3 @@ ib_send_bw -d mlx5_0 -i 1 -F --report_gbits <nodeA_hostname>
 # Expected: ~380-400 Gb/s per rail (NDR IB)
 ```
 
----
-
-## Questions and Support
-
-For cluster access, queue permissions, or IB hardware issues, contact the Scientific Computing Support team.
-
-For issues with these example scripts, open an issue at [JaneliaScientificComputingSystems/ray-training-examples](https://github.com/JaneliaScientificComputingSystems/ray-training-examples).
