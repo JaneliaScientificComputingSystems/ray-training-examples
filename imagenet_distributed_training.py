@@ -231,7 +231,7 @@ def train_func(config):
         # Stream batches from Ray Data
         train_dataloader = train_shard.iter_torch_batches(
             batch_size=config["batch_size"],
-            local_shuffle_buffer_size=config["batch_size"] * 16,
+            prefetch_batches=2,
         )
 
         for batch in train_dataloader:
@@ -278,7 +278,8 @@ def train_func(config):
             val_correct1 = val_correct5 = val_total = 0
 
             val_dataloader = val_shard.iter_torch_batches(
-                batch_size=config["batch_size"])
+                batch_size=config["batch_size"],
+                prefetch_batches=2)
 
             with torch.no_grad():
                 for batch in val_dataloader:
@@ -354,8 +355,8 @@ def main():
     val_ds = ray.data.read_parquet(val_files)
 
     # Apply transforms via map_batches
-    train_ds = train_ds.map_batches(transform_train_batch, batch_format="pandas")
-    val_ds = val_ds.map_batches(transform_val_batch, batch_format="pandas")
+    train_ds = train_ds.map_batches(transform_train_batch)
+    val_ds = val_ds.map_batches(transform_val_batch)
 
     print(f"Train: {len(train_files)} shards | Val: {len(val_files)} shards")
 
