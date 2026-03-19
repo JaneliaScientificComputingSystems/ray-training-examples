@@ -280,7 +280,7 @@ def train_func(config):
                 train_iter = iter(train_shard.iter_torch_batches(
                     batch_size=config["batch_size"],
                     dtypes=torch.long,
-                    local_shuffle_buffer_size=config["batch_size"] * 16,
+                    prefetch_batches=2,
                 ))
                 batch = next(train_iter)
 
