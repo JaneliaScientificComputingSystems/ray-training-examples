@@ -133,14 +133,14 @@ tar -xzf cifar-10-python.tar.gz && rm cifar-10-python.tar.gz
 
 ### Inference
 
-Inference scripts require a GPU — run them as LSF jobs, not on the login node:
+Give the classifier an image — it returns the top-3 predicted CIFAR-10 categories with confidence scores:
 
 ```bash
-# Test on CIFAR-10 samples
+# Test on CIFAR-10 validation samples
 ./run_inference.sh --venv=~/ray_env --script=image_classifier.py -- \
     --model ../models/cifar10_resnet18_best.pth --test
 
-# Classify a single image
+# Classify your own image
 ./run_inference.sh --venv=~/ray_env --script=image_classifier.py -- \
     --model ../models/cifar10_resnet18_best.pth --image photo.jpg
 ```
@@ -207,18 +207,28 @@ GPT-2 uses iteration count, not epochs. Each iteration processes `batch_size × 
 
 ### Evaluate & Generate
 
+**Perplexity evaluation** — measures how well the model predicts held-out text (lower = better, expect ~18-20):
+
 ```bash
-# Perplexity evaluation
 ./run_inference.sh --venv=~/ray_env --script=gpt2_eval.py -- \
     --model ../models/gpt2_ddp_best.pth --num-batches 200
+```
 
-# Text generation
+**Text generation** — GPT-2 is a text completion model, not a chatbot. Give it the start of a sentence and it continues writing in the style of web articles:
+
+```bash
 ./run_inference.sh --venv=~/ray_env --script=gpt2_generate.py -- \
     --model ../models/gpt2_ddp_best.pth --prompt "The brain"
+```
 
-# Interactive mode
-./run_inference.sh --venv=~/ray_env --script=gpt2_generate.py -- \
-    --model ../models/gpt2_ddp_best.pth --interactive
+**Interactive mode** — start a GPU shell and run the generate script directly:
+
+```bash
+bsub -n8 -q gpu_l4 -gpu "num=1" -W 4:00 -Is /bin/bash
+# once on the GPU node:
+cd ~/Ray_IB/ray-training-examples
+source ~/ray_env/bin/activate
+python gpt2_generate.py --model ../models/gpt2_ddp_best.pth --interactive
 ```
 
 ---
@@ -285,10 +295,14 @@ export HF_TOKEN="hf_..."
 
 ### Inference
 
+Give the classifier an image — it returns the top-5 predicted ImageNet categories (out of 1,000) with confidence scores:
+
 ```bash
+# Test on ImageNet validation samples
 ./run_inference.sh --venv=~/ray_env --script=imagenet_classifier.py -- \
     --model ../models/resnet50_imagenet_best.pth --test
 
+# Classify your own image
 ./run_inference.sh --venv=~/ray_env --script=imagenet_classifier.py -- \
     --model ../models/resnet50_imagenet_best.pth --image photo.jpg
 ```
