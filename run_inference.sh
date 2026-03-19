@@ -4,8 +4,8 @@
 #
 # Usage:
 #   ./run_inference.sh --script=image_classifier.py -- --model ../models/cifar10_resnet18_best.pth --test
-#   ./run_inference.sh --script=gpt2_generate.py -- --model ../models/gpt2_ddp_best.pth --interactive
-#   ./run_inference.sh --script=gpt2_eval.py -- --model ../models/gpt2_ddp_best.pth --num-batches 200
+#   ./run_inference.sh --script=gpt2_generate.py -- --model ../models/gpt2_small_ddp_best.pth --interactive
+#   ./run_inference.sh --script=gpt2_eval.py -- --model ../models/gpt2_small_ddp_best.pth --num-batches 200
 #   ./run_inference.sh --script=imagenet_classifier.py -- --model ../models/resnet50_imagenet_best.pth --test
 #
 # Options:
@@ -41,14 +41,28 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SCRIPT_NAME=$(basename "$PYTHON_SCRIPT" .py)
 
+# Set app profile based on queue
+case $QUEUE_NAME in
+    gpu_h200*|gpu_h100*) APP_PROFILE="parallel-96" ;;
+    gpu_l4_parallel)     APP_PROFILE="parallel-64" ;;
+    gpu_a100_parallel)   APP_PROFILE="parallel-48" ;;
+    *)                   APP_PROFILE="" ;;
+esac
+
 echo "Submitting: $PYTHON_SCRIPT $SCRIPT_ARGS"
 echo "Queue: $QUEUE_NAME (1 GPU)"
+
+APP_LINE=""
+if [ -n "$APP_PROFILE" ]; then
+    APP_LINE="#BSUB -app ${APP_PROFILE}"
+fi
 
 cat << EOF | bsub
 #!/bin/bash
 #BSUB -J ${SCRIPT_NAME}
 #BSUB -n 8
 #BSUB -q ${QUEUE_NAME}
+${APP_LINE}
 #BSUB -gpu "num=1:mode=exclusive_process"
 #BSUB -o ../output/${SCRIPT_NAME}_%J.out
 #BSUB -e ../output/${SCRIPT_NAME}_%J.err

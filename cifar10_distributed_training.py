@@ -110,9 +110,10 @@ def save_checkpoint(model, optimizer, epoch, train_acc, test_acc,
     # Always save latest (overwritten each epoch) + best (only when improved)
     suffix = "best" if is_best else "latest"
     path   = os.path.join(model_dir, f"cifar10_resnet18_{suffix}.pth")
+    raw = model.module if hasattr(model, "module") else model
     torch.save({
         "epoch": epoch,
-        "model_state_dict":     model.module.state_dict(),
+        "model_state_dict":     raw.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "train_accuracy":       train_acc,
         "test_accuracy":        test_acc,
@@ -124,7 +125,8 @@ def load_checkpoint(path, model, optimizer, device):
     if not os.path.exists(path):
         raise FileNotFoundError(f"Checkpoint not found: {path}")
     ckpt = torch.load(path, map_location=device)
-    model.module.load_state_dict(ckpt["model_state_dict"])
+    raw = model.module if hasattr(model, "module") else model
+    raw.load_state_dict(ckpt["model_state_dict"])
     optimizer.load_state_dict(ckpt["optimizer_state_dict"])
     start_epoch   = ckpt["epoch"] + 1
     best_test_acc = ckpt.get("test_accuracy", 0)
@@ -225,6 +227,11 @@ def train_func(config):
 
         test_loss /= len(testloader)
         test_acc   = 100. * test_correct / test_total
+
+        if world_size > 1:
+            ta = torch.tensor(test_acc, device=device)
+            dist.all_reduce(ta, op=dist.ReduceOp.AVG)
+            test_acc = ta.item()
 
         if config.get("save_models"):
             save_checkpoint(model, optimizer, epoch, train_acc, test_acc,

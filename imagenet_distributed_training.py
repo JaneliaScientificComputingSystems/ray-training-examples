@@ -6,6 +6,7 @@ Uses Ray Data for streaming data loading (official Ray Train pattern).
 Works on all Janelia GPU queues — IB and Ethernet NCCL.
 """
 import argparse
+import glob
 import os
 import time
 import math
@@ -296,6 +297,15 @@ def train_func(config):
                 val_top1 = 100.0 * val_correct1 / val_total
                 val_top5 = 100.0 * val_correct5 / val_total
 
+            if world_size > 1:
+                import torch.distributed as dist
+                t1 = torch.tensor(val_top1, device=device)
+                t5 = torch.tensor(val_top5, device=device)
+                dist.all_reduce(t1, op=dist.ReduceOp.AVG)
+                dist.all_reduce(t5, op=dist.ReduceOp.AVG)
+                val_top1 = t1.item()
+                val_top5 = t5.item()
+
             if config.get("save_models") and val_top1 > best_top1:
                 best_top1 = val_top1
                 save_checkpoint(model, optimizer, epoch, val_top1, val_top5,
@@ -343,7 +353,6 @@ def main():
     if not os.path.isdir(parquet_dir):
         parquet_dir = data_dir
 
-    import glob
     train_files = sorted(glob.glob(os.path.join(parquet_dir, "train-*.parquet")))
     val_files = sorted(glob.glob(os.path.join(parquet_dir, "validation-*.parquet")))
     if not train_files:

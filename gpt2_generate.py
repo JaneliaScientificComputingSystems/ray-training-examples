@@ -9,7 +9,6 @@ Usage:
 import argparse
 import math
 import torch
-import torch.nn as nn
 import tiktoken
 
 from gpt2_model import GPT2, GPT2_CONFIGS

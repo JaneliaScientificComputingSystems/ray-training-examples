@@ -12,7 +12,6 @@ import math
 import os
 import numpy as np
 import torch
-import torch.nn as nn
 import pyarrow.parquet as pq
 
 from gpt2_model import GPT2, GPT2_CONFIGS

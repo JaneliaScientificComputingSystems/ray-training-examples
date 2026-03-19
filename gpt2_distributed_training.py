@@ -24,6 +24,7 @@ from ray.train import ScalingConfig, RunConfig
 from ray.train.torch import TorchTrainer
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+from torch.distributed.fsdp import FullStateDictConfig, StateDictType
 
 from gpt2_model import GPT2, Block, GPT2_CONFIGS
 
@@ -72,18 +73,29 @@ def get_lr(it, warmup_iters, max_iters, lr, min_lr=6e-5):
 
 def save_checkpoint(model, optimizer, iter_num, val_loss, config,
                     is_best=False, world_rank=0):
-    if world_rank != 0:
-        return
     model_dir = config["model_dir"]
-    os.makedirs(model_dir, exist_ok=True)
+    mode = config.get("mode", "ddp")
+    size = config.get("model_size", "small")
     suffix = "best" if is_best else "latest"
-    mode   = config.get("mode", "ddp")
-    size   = config.get("model_size", "small")
-    path   = os.path.join(model_dir, f"gpt2_{size}_{mode}_{suffix}.pth")
-    raw    = model.module if hasattr(model, "module") else model
+    path = os.path.join(model_dir, f"gpt2_{size}_{mode}_{suffix}.pth")
+
+    if mode == "fsdp":
+        # FSDP: gather full state dict on rank 0, all ranks must participate
+        cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
+        with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT, cfg):
+            state_dict = model.state_dict()
+        if world_rank != 0:
+            return
+    else:
+        if world_rank != 0:
+            return
+        raw = model.module if hasattr(model, "module") else model
+        state_dict = raw.state_dict()
+
+    os.makedirs(model_dir, exist_ok=True)
     torch.save({
         "iter_num":            iter_num,
-        "model_state_dict":    raw.state_dict(),
+        "model_state_dict":    state_dict,
         "optimizer_state_dict": optimizer.state_dict(),
         "val_loss":            val_loss,
     }, path)
@@ -155,11 +167,16 @@ def train_func(config):
     best_val   = float("inf")
     start_iter = 0
 
-    if config.get("resume_checkpoint") and world_rank == 0:
-        start_iter, best_val = load_checkpoint(
-            config["resume_checkpoint"], model, optimizer, device)
+    if config.get("resume_checkpoint"):
+        if config["mode"] == "fsdp":
+            # FSDP: all ranks load the full state dict, then reshard
+            start_iter, best_val = load_checkpoint(
+                config["resume_checkpoint"], model, optimizer, device)
+        elif world_rank == 0:
+            start_iter, best_val = load_checkpoint(
+                config["resume_checkpoint"], model, optimizer, device)
 
-    if world_size > 1:
+    if world_size > 1 and config["mode"] != "fsdp":
         si = torch.tensor(start_iter, device=device)
         bv = torch.tensor(best_val,   device=device)
         dist.broadcast(si, src=0)
@@ -212,7 +229,7 @@ def train_func(config):
                 accum_loss += loss.item()
 
         tokens_total += (config["batch_size"] * config["grad_accum"]
-                         * config["seq_len"] * world_size)
+                         * (config["seq_len"] - 1) * world_size)
 
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
