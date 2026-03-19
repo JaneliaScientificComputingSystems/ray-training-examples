@@ -3,8 +3,8 @@
 ImageNet inference — classify images using a trained ResNet-50 checkpoint.
 
 Usage:
-    python imagenet_classifier.py --model ./models/resnet50_imagenet_best.pth --image photo.jpg
-    python imagenet_classifier.py --model ./models/resnet50_imagenet_best.pth --test
+    python imagenet_classifier.py --model ../models/resnet50_imagenet_best.pth --image photo.jpg
+    python imagenet_classifier.py --model ../models/resnet50_imagenet_best.pth --test
 """
 import argparse
 import io

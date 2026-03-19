@@ -3,8 +3,8 @@
 GPT-2 perplexity evaluation on OpenWebText val set (parquet shards).
 
 Usage:
-    python gpt2_eval.py --model ./models/gpt2_ddp_best.pth
-    python gpt2_eval.py --model ./models/gpt2_ddp_best.pth --num-batches 200
+    python gpt2_eval.py --model ../models/gpt2_ddp_best.pth
+    python gpt2_eval.py --model ../models/gpt2_ddp_best.pth --num-batches 200
 """
 import argparse
 import glob

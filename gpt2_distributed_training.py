@@ -284,7 +284,7 @@ def main():
         print(f"ERROR: {train_dir} not found — run prepare_openwebtext.sh first")
         return
 
-    model_dir = os.path.join(os.path.abspath(os.getcwd()), "models")
+    model_dir = os.path.join(os.path.abspath(os.getcwd()), "..", "models")
 
     ray.init(address="auto")
     nccl_ib = os.environ.get("NCCL_IB_DISABLE", "1")

@@ -3,8 +3,8 @@
 CIFAR-10 inference — classify images using a trained ResNet-18 checkpoint.
 
 Usage:
-    python image_classifier.py --model ./models/cifar10_resnet18_best.pth --test
-    python image_classifier.py --model ./models/cifar10_resnet18_best.pth --image photo.jpg
+    python image_classifier.py --model ../models/cifar10_resnet18_best.pth --test
+    python image_classifier.py --model ../models/cifar10_resnet18_best.pth --image photo.jpg
 """
 import argparse
 import os

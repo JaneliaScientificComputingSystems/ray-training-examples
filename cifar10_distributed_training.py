@@ -256,7 +256,7 @@ def main():
         return
 
     submission_dir = os.path.abspath(os.getcwd())
-    model_dir      = os.path.join(submission_dir, "models")
+    model_dir      = os.path.join(submission_dir, "..", "models")
 
     ray.init(address="auto")
     print(f"Ray resources: {ray.available_resources()}")

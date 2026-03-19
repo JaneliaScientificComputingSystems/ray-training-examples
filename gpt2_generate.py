@@ -3,8 +3,8 @@
 GPT-2 text generation from a trained checkpoint.
 
 Usage:
-    python gpt2_generate.py --model ./models/gpt2_ddp_best.pth --prompt "The brain"
-    python gpt2_generate.py --model ./models/gpt2_ddp_best.pth --interactive
+    python gpt2_generate.py --model ../models/gpt2_ddp_best.pth --prompt "The brain"
+    python gpt2_generate.py --model ../models/gpt2_ddp_best.pth --interactive
 """
 import argparse
 import math

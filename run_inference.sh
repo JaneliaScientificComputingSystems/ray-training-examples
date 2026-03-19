@@ -3,10 +3,10 @@
 # Run inference scripts as LSF jobs (single GPU)
 #
 # Usage:
-#   ./run_inference.sh --script=image_classifier.py -- --model ./models/cifar10_resnet18_best.pth --test
-#   ./run_inference.sh --script=gpt2_generate.py -- --model ./models/gpt2_ddp_best.pth --interactive
-#   ./run_inference.sh --script=gpt2_eval.py -- --model ./models/gpt2_ddp_best.pth --num-batches 200
-#   ./run_inference.sh --script=imagenet_classifier.py -- --model ./models/resnet50_imagenet_best.pth --test
+#   ./run_inference.sh --script=image_classifier.py -- --model ../models/cifar10_resnet18_best.pth --test
+#   ./run_inference.sh --script=gpt2_generate.py -- --model ../models/gpt2_ddp_best.pth --interactive
+#   ./run_inference.sh --script=gpt2_eval.py -- --model ../models/gpt2_ddp_best.pth --num-batches 200
+#   ./run_inference.sh --script=imagenet_classifier.py -- --model ../models/resnet50_imagenet_best.pth --test
 #
 # Options:
 #   --queue=QUEUE    GPU queue (default: gpu_l4_parallel)

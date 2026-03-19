@@ -90,7 +90,7 @@ Trains a ResNet-18 (11M parameters) image classifier using Distributed Data Para
 ### What it produces
 
 - Training logs with per-epoch accuracy and loss
-- Model checkpoints (`.pth` files) saved to `./models/` when `--save-models` is used
+- Model checkpoints (`.pth` files) saved to `../models/` when `--save-models` is used
 - Best checkpoint based on test accuracy (~89-91% after 50 epochs)
 - Checkpoints can be used with `image_classifier.py` for inference on new images
 
@@ -138,11 +138,11 @@ Inference scripts require a GPU — run them as LSF jobs, not on the login node:
 ```bash
 # Test on CIFAR-10 samples
 ./run_inference.sh --venv=~/ray_env --script=image_classifier.py -- \
-    --model ./models/cifar10_resnet18_best.pth --test
+    --model ../models/cifar10_resnet18_best.pth --test
 
 # Classify a single image
 ./run_inference.sh --venv=~/ray_env --script=image_classifier.py -- \
-    --model ./models/cifar10_resnet18_best.pth --image photo.jpg
+    --model ../models/cifar10_resnet18_best.pth --image photo.jpg
 ```
 
 ---
@@ -161,7 +161,7 @@ Trains GPT-2 small (117M parameters, 12 layers, 768 hidden dim, 12 attention hea
 
 - Training logs with loss, learning rate, and tokens/sec throughput
 - Periodic validation loss (perplexity) evaluation
-- Model checkpoints (`.pth` files) saved to `./models/`
+- Model checkpoints (`.pth` files) saved to `../models/`
 - Trained models can be evaluated with `gpt2_eval.py` or used for text generation with `gpt2_generate.py`
 
 ### Data
@@ -210,15 +210,15 @@ GPT-2 uses iteration count, not epochs. Each iteration processes `batch_size × 
 ```bash
 # Perplexity evaluation
 ./run_inference.sh --venv=~/ray_env --script=gpt2_eval.py -- \
-    --model ./models/gpt2_ddp_best.pth --num-batches 200
+    --model ../models/gpt2_ddp_best.pth --num-batches 200
 
 # Text generation
 ./run_inference.sh --venv=~/ray_env --script=gpt2_generate.py -- \
-    --model ./models/gpt2_ddp_best.pth --prompt "The brain"
+    --model ../models/gpt2_ddp_best.pth --prompt "The brain"
 
 # Interactive mode
 ./run_inference.sh --venv=~/ray_env --script=gpt2_generate.py -- \
-    --model ./models/gpt2_ddp_best.pth --interactive
+    --model ../models/gpt2_ddp_best.pth --interactive
 ```
 
 ---
@@ -237,7 +237,7 @@ Trains ResNet-50 (25.6M parameters) using DDP with large-batch SGD (momentum 0.9
 
 - Training logs with per-epoch top-1 accuracy, loss, learning rate, and images/sec throughput
 - Periodic validation with top-1 and top-5 accuracy
-- Model checkpoints (`.pth` files) saved to `./models/`
+- Model checkpoints (`.pth` files) saved to `../models/`
 - Target: ~76%+ top-1 accuracy after 90 epochs (~3h on 16x H200)
 
 ### Data
@@ -287,10 +287,10 @@ export HF_TOKEN="hf_..."
 
 ```bash
 ./run_inference.sh --venv=~/ray_env --script=imagenet_classifier.py -- \
-    --model ./models/resnet50_imagenet_best.pth --test
+    --model ../models/resnet50_imagenet_best.pth --test
 
 ./run_inference.sh --venv=~/ray_env --script=imagenet_classifier.py -- \
-    --model ./models/resnet50_imagenet_best.pth --image photo.jpg
+    --model ../models/resnet50_imagenet_best.pth --image photo.jpg
 ```
 
 ### Batch size reference
@@ -314,22 +314,22 @@ All scripts support `--resume`:
 ./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
     --script=cifar10_distributed_training.py -- \
     --num-gpus=16 --num-nodes=2 --epochs=50 --save-models \
-    --resume=./models/cifar10_resnet18_latest.pth
+    --resume=../models/cifar10_resnet18_latest.pth
 
 # Resume ImageNet
 ./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
     --script=imagenet_distributed_training.py -- \
     --num-gpus=16 --num-nodes=2 --epochs=90 --batch-size=128 --save-models \
-    --resume=./models/resnet50_imagenet_latest.pth
+    --resume=../models/resnet50_imagenet_latest.pth
 
 # Resume GPT-2
 ./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
     --script=gpt2_distributed_training.py -- \
     --num-gpus=16 --num-nodes=2 --mode=ddp --max-iters=5000 --save-models \
-    --resume=./models/gpt2_ddp_latest.pth
+    --resume=../models/gpt2_ddp_latest.pth
 ```
 
-Checkpoints: `--save-models` saves `<model>_latest.pth` (every epoch) and `<model>_best.pth` (on improvement) to `./models/`.
+Checkpoints: `--save-models` saves `<model>_latest.pth` (every epoch) and `<model>_best.pth` (on improvement) to `../models/`.
 
 ---
 
