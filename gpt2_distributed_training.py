@@ -18,7 +18,7 @@ import ray.train.torch
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from ray.train import ScalingConfig, RunConfig
+from ray.train import DataConfig, ScalingConfig, RunConfig
 from ray.train.torch import TorchTrainer
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
@@ -422,6 +422,7 @@ def main():
             "model_dir":         model_dir,
         },
         datasets={"train": train_ds, "val": val_ds},
+        dataset_config=DataConfig(datasets_to_split="all", enable_shard_locality=False),
         scaling_config=scaling_config,
         run_config=run_config,
     )
