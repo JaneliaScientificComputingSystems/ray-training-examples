@@ -57,7 +57,7 @@ while [[ $# -gt 0 ]]; do
         --job-name=*) JOB_NAME="${1#*=}"; shift ;;
         --walltime=*) WALLTIME="${1#*=}"; shift ;;
         --venv=*)     VENV_PATH="${1#*=}"; shift ;;
-        --) shift; SCRIPT_ARGS="$@"; break ;;
+        --) shift; SCRIPT_ARGS=$(printf '%q ' "$@"); break ;;
         *) echo "Unknown option: $1"; usage ;;
     esac
 done

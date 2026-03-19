@@ -24,7 +24,7 @@ while [[ $# -gt 0 ]]; do
         --queue=*)   QUEUE_NAME="${1#*=}"; shift ;;
         --script=*)  PYTHON_SCRIPT="${1#*=}"; shift ;;
         --venv=*)    VENV_PATH="${1#*=}"; shift ;;
-        --) shift; SCRIPT_ARGS="$@"; break ;;
+        --) shift; SCRIPT_ARGS=$(printf '%q ' "$@"); break ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
