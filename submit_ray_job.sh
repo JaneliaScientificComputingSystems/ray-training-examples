@@ -149,7 +149,7 @@ function getfreeport() {
     CHECK="do while"
     while [[ ! -z \$CHECK ]]; do
         port=\$(( ( RANDOM % 40000 ) + 20000 ))
-        CHECK=\$(netstat -a | grep \$port)
+        CHECK=\$(ss -tln | grep ":\$port ")
     done
     echo \$port
 }

@@ -14,6 +14,8 @@ from torch.utils.data import DataLoader, DistributedSampler
 from ray.train import ScalingConfig, RunConfig
 from ray.train.torch import TorchTrainer
 
+from resnet18_cifar import ResNet18
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--num-gpus",    type=int, required=True)
@@ -71,19 +73,6 @@ def get_cifar10_dataloaders(batch_size, world_size, rank):
                              pin_memory=True, persistent_workers=True)
 
     return trainloader, testloader, train_sampler
-
-class ResNet18(nn.Module):
-    """ResNet-18 adapted for CIFAR-10 (32x32 input)."""
-    def __init__(self, num_classes=10):
-        super().__init__()
-        self.resnet = torchvision.models.resnet18(weights=None)
-        self.resnet.conv1   = nn.Conv2d(3, 64, kernel_size=3,
-                                         stride=1, padding=1, bias=False)
-        self.resnet.maxpool = nn.Identity()
-        self.resnet.fc      = nn.Linear(self.resnet.fc.in_features, num_classes)
-
-    def forward(self, x):
-        return self.resnet(x)
 
 def verify_ib_in_use():
     """Verify IB HCAs are active and Ethernet NIC (mlx5_5) is excluded.

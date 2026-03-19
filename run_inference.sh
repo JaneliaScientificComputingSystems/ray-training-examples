@@ -15,13 +15,21 @@
 #===============================================================================
 
 QUEUE_NAME="gpu_l4_parallel"
+APP_PROFILE="parallel-64"
 PYTHON_SCRIPT=""
 VENV_PATH=""
 SCRIPT_ARGS=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --queue=*)   QUEUE_NAME="${1#*=}"; shift ;;
+        --queue=*)
+            QUEUE_NAME="${1#*=}"
+            case "$QUEUE_NAME" in
+                gpu_h200_parallel|gpu_h100_parallel) APP_PROFILE="parallel-96" ;;
+                gpu_l4_parallel)                     APP_PROFILE="parallel-64" ;;
+                gpu_a100_parallel)                   APP_PROFILE="parallel-48" ;;
+            esac
+            shift ;;
         --script=*)  PYTHON_SCRIPT="${1#*=}"; shift ;;
         --venv=*)    VENV_PATH="${1#*=}"; shift ;;
         --) shift; SCRIPT_ARGS="$@"; break ;;
@@ -48,6 +56,7 @@ cat << EOF | bsub
 #!/bin/bash
 #BSUB -J ${SCRIPT_NAME}
 #BSUB -n 8
+#BSUB -app ${APP_PROFILE}
 #BSUB -q ${QUEUE_NAME}
 #BSUB -gpu "num=1:mode=exclusive_process"
 #BSUB -o ../output/${SCRIPT_NAME}_%J.out

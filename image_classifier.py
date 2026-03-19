@@ -14,26 +14,14 @@ import torchvision
 import torchvision.transforms as transforms
 from PIL import Image
 
+from resnet18_cifar import ResNet18
+
 CLASSES = [
     "airplane", "automobile", "bird", "cat", "deer",
     "dog", "frog", "horse", "ship", "truck",
 ]
 
 DATA_DIR = "/nrs/scicompsys/Goran/cifar10"
-
-
-class ResNet18(nn.Module):
-    """Must match the training script architecture."""
-    def __init__(self, num_classes=10):
-        super().__init__()
-        self.resnet = torchvision.models.resnet18(weights=None)
-        self.resnet.conv1 = nn.Conv2d(3, 64, kernel_size=3,
-                                      stride=1, padding=1, bias=False)
-        self.resnet.maxpool = nn.Identity()
-        self.resnet.fc = nn.Linear(self.resnet.fc.in_features, num_classes)
-
-    def forward(self, x):
-        return self.resnet(x)
 
 
 def load_model(path, device):
