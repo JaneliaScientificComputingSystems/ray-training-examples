@@ -35,18 +35,19 @@ class ValDataset(torch.utils.data.Dataset):
             for batch in table.to_batches():
                 for row in batch.column("input_ids"):
                     tokens = row.as_py()
-                    if len(tokens) >= seq_len + 1:
-                        rows.append(tokens[:seq_len + 1])
+                    if len(tokens) >= 2:
+                        rows.append(tokens[:seq_len])
+        if not rows:
+            raise ValueError(f"No valid sequences found in {val_dir}")
         self.data = np.array(rows, dtype=np.int64)
-        self.seq_len = seq_len
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         tokens = self.data[idx]
-        x = torch.tensor(tokens[:self.seq_len], dtype=torch.long)
-        y = torch.tensor(tokens[1:self.seq_len + 1], dtype=torch.long)
+        x = torch.tensor(tokens[:-1], dtype=torch.long)
+        y = torch.tensor(tokens[1:], dtype=torch.long)
         return x, y
 
 
