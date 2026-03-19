@@ -49,9 +49,9 @@ pip install datasets tiktoken
 | `submit_ray_job.sh` | LSF job submission — auto-configures NCCL per queue |
 | `run_inference.sh` | LSF job submission for inference (single GPU) |
 | `cifar10_distributed_training.py` | ResNet-18 on CIFAR-10 — multi-node DDP |
-| `prepare_openwebtext.sh` | Downloads and tokenizes OpenWebText for GPT-2 |
+| `prepare_openwebtext.sh` | Downloads and tokenizes OpenWebText (already done — for reference) |
 | `gpt2_distributed_training.py` | GPT-2 small (117M) — DDP and FSDP modes |
-| `prepare_imagenet.sh` | Downloads ImageNet-1K and builds Arrow cache |
+| `prepare_imagenet.sh` | Downloads ImageNet-1K (already done — for reference) |
 | `imagenet_distributed_training.py` | ResNet-50 on ImageNet-1K — distributed benchmark |
 | `image_classifier.py` | CIFAR-10 inference with trained checkpoints |
 | `gpt2_eval.py` | GPT-2 perplexity evaluation on val set |
@@ -96,15 +96,17 @@ Trains a ResNet-18 (11M parameters) image classifier using Distributed Data Para
 
 ### Data
 
-CIFAR-10 is available at `/nrs/ml_datasets/cifar10` (shared NFS). Training scripts use this by default — no setup required.
+CIFAR-10 is pre-installed at `/nrs/ml_datasets/cifar10` (shared NFS). All scripts use this by default — just run them, no data setup needed.
 
-To prepare your own copy (one-time, ~170 MB):
+<details><summary>Preparing your own copy (optional — only if you need a separate location)</summary>
 
 ```bash
 mkdir -p /your/path/cifar10 && cd /your/path/cifar10
 wget https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz
 tar -xzf cifar-10-python.tar.gz && rm cifar-10-python.tar.gz
 ```
+
+</details>
 
 ### Train
 
@@ -164,14 +166,16 @@ Trains GPT-2 small (117M parameters, 12 layers, 768 hidden dim, 12 attention hea
 
 ### Data
 
-Tokenized OpenWebText is available at `/nrs/ml_datasets/openwebtext` (shared NFS). Training scripts use this by default — no setup required.
+Tokenized OpenWebText is pre-installed at `/nrs/ml_datasets/openwebtext` (shared NFS). All scripts use this by default — just run them, no data setup needed.
 
-To prepare your own copy (one-time, ~30 min, ~9 GB):
+<details><summary>Preparing your own copy (optional — only if you need a separate location)</summary>
 
 ```bash
 pip install datasets tiktoken
 ./prepare_openwebtext.sh --data-dir=/your/path
 ```
+
+</details>
 
 ### Train
 
@@ -238,9 +242,9 @@ Trains ResNet-50 (25.6M parameters) using DDP with large-batch SGD (momentum 0.9
 
 ### Data
 
-ImageNet-1K is available at `/nrs/ml_datasets/imagenet` (shared NFS, ~138 GB). Training scripts use this by default — no setup required.
+ImageNet-1K is pre-installed at `/nrs/ml_datasets/imagenet` (shared NFS, ~138 GB). All scripts use this by default — just run them, no data setup needed.
 
-To prepare your own copy (one-time, ~15 min):
+<details><summary>Preparing your own copy (optional — only if you need a separate location)</summary>
 
 1. Create a [HuggingFace](https://huggingface.co) account
 2. Accept the license at [ILSVRC/imagenet-1k](https://huggingface.co/datasets/ILSVRC/imagenet-1k)
@@ -250,6 +254,8 @@ To prepare your own copy (one-time, ~15 min):
 export HF_TOKEN="hf_..."
 ./prepare_imagenet.sh --data-dir=/your/path
 ```
+
+</details>
 
 ### Train
 
