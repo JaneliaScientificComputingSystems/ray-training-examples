@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GPT-2 small (117M) model architecture.
+GPT-2 model architecture (117M to 2.7B).
 Shared by training, evaluation, and generation scripts.
 """
 import math
@@ -9,10 +9,16 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 
-GPT2_CONFIG = {
-    "vocab_size": 50257, "block_size": 1024,
-    "n_layer": 12, "n_head": 12, "n_embd": 768,
+GPT2_CONFIGS = {
+    "small":  {"vocab_size": 50257, "block_size": 1024, "n_layer": 12, "n_head": 12, "n_embd": 768},    # 117M
+    "medium": {"vocab_size": 50257, "block_size": 1024, "n_layer": 24, "n_head": 16, "n_embd": 1024},   # 345M
+    "large":  {"vocab_size": 50257, "block_size": 1024, "n_layer": 36, "n_head": 20, "n_embd": 1280},   # 774M
+    "xl":     {"vocab_size": 50257, "block_size": 1024, "n_layer": 48, "n_head": 25, "n_embd": 1600},   # 1.5B
+    "2b":     {"vocab_size": 50257, "block_size": 1024, "n_layer": 56, "n_head": 32, "n_embd": 2048},   # 2.7B
 }
+
+# Backward compat — default config used when no size is specified
+GPT2_CONFIG = GPT2_CONFIGS["small"]
 
 
 class CausalSelfAttention(nn.Module):

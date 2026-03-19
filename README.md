@@ -1,13 +1,13 @@
 # Ray Distributed Training Examples
 
-Distributed PyTorch training with Ray on Janelia's GPU cluster. The submission script auto-configures NCCL for InfiniBand (H200/H100) or Ethernet (L4/A100) based on the queue you select.
+Distributed PyTorch training with Ray on Janelia's GPU cluster. Uses InfiniBand NDR (400 Gb/s) with GPUDirect RDMA on H200/H100 nodes for high-performance multi-node training.
 
 Three ready-to-run examples that progressively exercise the cluster:
 
 | Example | Model | Dataset | Purpose |
 |---------|-------|---------|---------|
-| CIFAR-10 | ResNet-18 (11M) | 60K images, 170 MB | Quick smoke test — minutes on any queue |
-| GPT-2 | GPT-2 small (117M) | OpenWebText, 9 GB | Language model with sustained IB load (~1.7 GB allreduce/step) |
+| CIFAR-10 | ResNet-18 (11M) | 60K images, 170 MB | Quick smoke test — minutes on 2 nodes |
+| GPT-2 | GPT-2 small–2.7B | OpenWebText, 9 GB | Language model — scales from quick tests to full IB stress tests |
 | ImageNet | ResNet-50 (25.6M) | ImageNet-1K, 138 GB | Industry-standard benchmark for cluster validation |
 
 ---
@@ -18,10 +18,8 @@ Three ready-to-run examples that progressively exercise the cluster:
 |-------|-----|-----------|---------|-----------|
 | `gpu_h200_parallel` | H200 | 8 | InfiniBand NDR 400 Gb/s | 96 |
 | `gpu_h100_parallel` | H100 | 8 | InfiniBand NDR 400 Gb/s | 96 |
-| `gpu_l4_parallel` | L4 | 8 | Ethernet | 64 |
-| `gpu_a100_parallel` | A100 | 4 | Ethernet | 48 |
 
-Use H200/H100 for multi-node jobs and large models. L4 nodes work well for single-node training and development.
+Single-GPU inference jobs use `gpu_l4` (see `run_inference.sh`).
 
 ---
 
@@ -50,7 +48,7 @@ pip install datasets tiktoken
 | `run_inference.sh` | LSF job submission for inference (single GPU) |
 | `cifar10_distributed_training.py` | ResNet-18 on CIFAR-10 — multi-node DDP |
 | `prepare_openwebtext.sh` | Downloads and tokenizes OpenWebText (already done — for reference) |
-| `gpt2_distributed_training.py` | GPT-2 small (117M) — DDP and FSDP modes |
+| `gpt2_distributed_training.py` | GPT-2 (117M–2.7B) — DDP and FSDP modes |
 | `prepare_imagenet.sh` | Downloads ImageNet-1K (already done — for reference) |
 | `imagenet_distributed_training.py` | ResNet-50 on ImageNet-1K — distributed benchmark |
 | `image_classifier.py` | CIFAR-10 inference with trained checkpoints |
@@ -66,7 +64,7 @@ pip install datasets tiktoken
 ./submit_ray_job.sh <num_nodes> --script=SCRIPT [options] [-- script_args...]
 
 Options:
-  --queue=QUEUE        GPU queue (default: gpu_l4_parallel)
+  --queue=QUEUE        GPU queue (gpu_h200_parallel or gpu_h100_parallel)
   --venv=PATH          Python venv path
   --job-name=NAME      Job name (default: ray_job)
   --walltime=TIME      Walltime (default: 4:00 for <=2 nodes, 8:00 otherwise)
@@ -124,11 +122,6 @@ tar -xzf cifar-10-python.tar.gz && rm cifar-10-python.tar.gz
 ./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
     --script=cifar10_distributed_training.py -- \
     --num-gpus=16 --num-nodes=2 --epochs=50 --batch-size=256 --save-models
-
-# L4 — 1 node, 8 GPUs
-./submit_ray_job.sh 1 --queue=gpu_l4_parallel --venv=~/ray_env \
-    --script=cifar10_distributed_training.py -- \
-    --num-gpus=8 --num-nodes=1 --epochs=20 --save-models
 ```
 
 ### Inference
@@ -153,9 +146,21 @@ Give the classifier an image — it returns the top-3 predicted CIFAR-10 categor
 
 [OpenWebText](https://huggingface.co/datasets/openwebtext) is a reproduction of the WebText corpus used to train the original GPT-2. It contains ~8 million web pages scraped from URLs shared on Reddit with at least 3 karma. The text is tokenized with GPT-2's BPE tokenizer (50,257 token vocabulary) into ~4.5 billion tokens. A 0.05% held-out validation split is used for perplexity evaluation.
 
+### Model sizes
+
+Five model sizes are available via `--model-size`. Larger models generate proportionally more network traffic per step — use them to stress-test the IB fabric.
+
+| Size | Layers | Heads | Dim | Params | Allreduce/step | Recommended mode |
+|------|--------|-------|-----|--------|----------------|------------------|
+| `small` | 12 | 12 | 768 | 117M | ~0.5 GB | DDP |
+| `medium` | 24 | 16 | 1024 | 345M | ~1.4 GB | DDP |
+| `large` | 36 | 20 | 1280 | 774M | ~3.1 GB | DDP |
+| `xl` | 48 | 25 | 1600 | 1.5B | ~6.0 GB | DDP or FSDP |
+| `2b` | 56 | 32 | 2048 | 2.7B | ~10.8 GB | FSDP |
+
 ### What the training does
 
-Trains GPT-2 small (117M parameters, 12 layers, 768 hidden dim, 12 attention heads) to predict the next token in a sequence. Uses DDP or FSDP for distributed training with gradient accumulation (effective batch = batch_size × grad_accum × num_gpus sequences). Mixed precision (bfloat16 on H200/H100) with cosine LR schedule and warmup. Each training step produces ~1.7 GB of gradient data that must be synchronized across all GPUs via allreduce — this creates sustained IB traffic.
+Trains GPT-2 to predict the next token in a sequence. Uses DDP or FSDP for distributed training with gradient accumulation (effective batch = batch_size × grad_accum × num_gpus sequences). Mixed precision (bfloat16 on H200/H100) with cosine LR schedule and warmup. Gradient data is synchronized across all GPUs via allreduce (DDP) or reduce-scatter/allgather (FSDP) — this creates sustained IB traffic that scales with model size.
 
 ### What it produces
 
@@ -186,7 +191,7 @@ GPT-2 uses iteration count, not epochs. Each iteration processes `batch_size × 
 **Full training (~6h on 16 GPUs):** 50K iters processes ~50B tokens (~5 passes over OpenWebText). Expect perplexity ~29 at convergence.
 
 ```bash
-# Validation run — 2000 iters
+# Validation run — GPT-2 small, 2000 iters
 ./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
     --script=gpt2_distributed_training.py -- \
     --num-gpus=16 --num-nodes=2 --mode=ddp \
@@ -197,13 +202,37 @@ GPT-2 uses iteration count, not epochs. Each iteration processes `batch_size × 
     --script=gpt2_distributed_training.py -- \
     --num-gpus=16 --num-nodes=2 --mode=ddp \
     --max-iters=50000 --batch-size=8 --grad-accum=8 --save-models
-
-# FSDP mode (for models that don't fit in single GPU memory)
-./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
-    --script=gpt2_distributed_training.py -- \
-    --num-gpus=16 --num-nodes=2 --mode=fsdp \
-    --max-iters=2000 --batch-size=8 --grad-accum=8 --save-models
 ```
+
+#### IB stress tests (larger models)
+
+Larger model sizes generate significantly more cross-node traffic. Use FSDP for `2b` — it shards parameters across GPUs, adding allgather + reduce-scatter traffic on top of gradient sync.
+
+```bash
+# GPT-2 XL (1.5B) — DDP, 64 GPUs
+./submit_ray_job.sh 8 --queue=gpu_h200_parallel --venv=~/ray_env \
+    --job-name=gpt2_xl \
+    --script=gpt2_distributed_training.py -- \
+    --num-gpus=64 --num-nodes=8 --model-size=xl --mode=ddp \
+    --max-iters=500 --batch-size=4 --grad-accum=4
+
+# GPT-2 2.7B — FSDP, 64 GPUs (heaviest IB load)
+./submit_ray_job.sh 8 --queue=gpu_h200_parallel --venv=~/ray_env \
+    --job-name=gpt2_2b \
+    --script=gpt2_distributed_training.py -- \
+    --num-gpus=64 --num-nodes=8 --model-size=2b --mode=fsdp \
+    --max-iters=500 --batch-size=2 --grad-accum=8
+```
+
+#### Batch size reference by model size (H200, 141 GB)
+
+| Size | DDP per-GPU batch | FSDP per-GPU batch |
+|------|-------------------|--------------------|
+| small (117M) | 8 | 8 |
+| medium (345M) | 8 | 8 |
+| large (774M) | 4–8 | 8 |
+| xl (1.5B) | 2–4 | 4–8 |
+| 2b (2.7B) | — | 2–4 |
 
 ### Evaluate & Generate
 
@@ -211,14 +240,18 @@ GPT-2 uses iteration count, not epochs. Each iteration processes `batch_size × 
 
 ```bash
 ./run_inference.sh --venv=~/ray_env --script=gpt2_eval.py -- \
-    --model ../models/gpt2_ddp_best.pth --num-batches 200
+    --model ../models/gpt2_small_ddp_best.pth --num-batches 200
+
+# For larger models, specify --model-size to match the checkpoint
+./run_inference.sh --venv=~/ray_env --script=gpt2_eval.py -- \
+    --model ../models/gpt2_xl_ddp_best.pth --model-size=xl --num-batches 200
 ```
 
 **Text generation** — GPT-2 is a text completion model, not a chatbot. Give it the start of a sentence and it continues writing in the style of web articles:
 
 ```bash
 ./run_inference.sh --venv=~/ray_env --script=gpt2_generate.py -- \
-    --model ../models/gpt2_ddp_best.pth --prompt "The brain"
+    --model ../models/gpt2_small_ddp_best.pth --prompt "The brain"
 ```
 
 **Interactive mode** — start a GPU shell and run the generate script directly:
@@ -228,7 +261,7 @@ bsub -n8 -q gpu_l4 -gpu "num=1" -W 4:00 -Is /bin/bash
 # once on the GPU node:
 cd ~/Ray_IB/ray-training-examples
 source ~/ray_env/bin/activate
-python gpt2_generate.py --model ../models/gpt2_ddp_best.pth --interactive
+python gpt2_generate.py --model ../models/gpt2_small_ddp_best.pth --interactive
 ```
 
 ---
@@ -311,11 +344,10 @@ Give the classifier an image — it returns the top-5 predicted ImageNet categor
 
 LR is automatically scaled: `lr = base_lr * effective_batch / 256`.
 
-| GPU | Per-GPU batch | Notes |
-|-----|--------------|-------|
-| H200 (141 GB) | 128–256 | |
-| H100 (80 GB) | 128 | |
-| L4 (24 GB) | 32–64 | |
+| GPU | Per-GPU batch |
+|-----|--------------|
+| H200 (141 GB) | 128–256 |
+| H100 (80 GB) | 128 |
 
 ---
 
@@ -339,8 +371,9 @@ All scripts support `--resume`:
 # Resume GPT-2
 ./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
     --script=gpt2_distributed_training.py -- \
-    --num-gpus=16 --num-nodes=2 --mode=ddp --max-iters=5000 --save-models \
-    --resume=../models/gpt2_ddp_latest.pth
+    --num-gpus=16 --num-nodes=2 --model-size=small --mode=ddp \
+    --max-iters=5000 --save-models \
+    --resume=../models/gpt2_small_ddp_latest.pth
 ```
 
 Checkpoints: `--save-models` saves `<model>_latest.pth` (every epoch) and `<model>_best.pth` (on improvement) to `../models/`.
@@ -363,6 +396,4 @@ tail -f ../output/*_<JOBID>.err    # errors
 |---------|----------|
 | Out of memory | Reduce `--batch-size` |
 | Ray timeout | Resubmit — transient scheduling issue |
-| Wrong GPU count | A100 = 4/node, all others = 8/node |
-| L4 slow multi-node | Expected — use fewer nodes or larger batch |
 | NCCL errors or hangs | Contact SCS |

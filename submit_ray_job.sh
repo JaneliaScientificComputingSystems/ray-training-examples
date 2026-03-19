@@ -15,8 +15,8 @@
 #
 # Queue auto-configuration:
 #   gpu_h200_parallel  -> 96 CPUs, 8 GPUs, InfiniBand NCCL
-#   gpu_h100_parallel  -> 96 CPUs, 8 GPUs, InfiniBand NCCL
-#   gpu_l4_parallel    -> 64 CPUs, 8 GPUs, Ethernet NCCL  [default]
+#   gpu_h100_parallel  -> 96 CPUs, 8 GPUs, InfiniBand NCCL  [default]
+#   gpu_l4_parallel    -> 64 CPUs, 8 GPUs, Ethernet NCCL
 #   gpu_a100_parallel  -> 48 CPUs, 4 GPUs, Ethernet NCCL
 #===============================================================================
 
@@ -28,7 +28,7 @@ usage() {
     echo "  --script=FILE        Python script to run"
     echo ""
     echo "Optional:"
-    echo "  --queue=QUEUE        LSF queue (default: gpu_l4_parallel)"
+    echo "  --queue=QUEUE        LSF queue (default: gpu_h100_parallel)"
     echo "  --job-name=NAME      Job name (default: ray_job)"
     echo "  --walltime=TIME      Walltime in hours (default: auto)"
     echo "  --venv=PATH          Python venv path"
@@ -43,7 +43,7 @@ if [ $# -lt 2 ]; then usage; fi
 NUM_NODES=$1
 shift
 
-QUEUE_NAME="gpu_l4_parallel"
+QUEUE_NAME="gpu_h100_parallel"
 PYTHON_SCRIPT=""
 JOB_NAME="ray_job"
 WALLTIME=""

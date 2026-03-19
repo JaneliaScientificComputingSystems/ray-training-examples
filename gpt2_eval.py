@@ -3,8 +3,8 @@
 GPT-2 perplexity evaluation on OpenWebText val set (parquet shards).
 
 Usage:
-    python gpt2_eval.py --model ../models/gpt2_ddp_best.pth
-    python gpt2_eval.py --model ../models/gpt2_ddp_best.pth --num-batches 200
+    python gpt2_eval.py --model ../models/gpt2_small_ddp_best.pth
+    python gpt2_eval.py --model ../models/gpt2_xl_ddp_best.pth --model-size=xl
 """
 import argparse
 import glob
@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 import pyarrow.parquet as pq
 
-from gpt2_model import GPT2
+from gpt2_model import GPT2, GPT2_CONFIGS
 
 
 # ---------------------------------------------------------------------------
@@ -55,9 +55,9 @@ class ValDataset(torch.utils.data.Dataset):
 # Evaluation
 # ---------------------------------------------------------------------------
 
-def load_model(path, device):
+def load_model(path, device, model_size="small"):
     ckpt = torch.load(path, map_location=device, weights_only=True)
-    model = GPT2()
+    model = GPT2(GPT2_CONFIGS[model_size])
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device).eval()
     val_loss = ckpt.get("val_loss", float("nan"))
@@ -71,6 +71,8 @@ def load_model(path, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="Path to .pth checkpoint")
+    parser.add_argument("--model-size", choices=list(GPT2_CONFIGS.keys()), default="small",
+                        help="Model size (must match checkpoint)")
     parser.add_argument("--data-dir", default="/nrs/ml_datasets/openwebtext")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-batches", type=int, default=None,
@@ -82,7 +84,7 @@ def main():
         "cuda" if torch.cuda.is_available() else "cpu"
     ) if args.device == "auto" else torch.device(args.device)
 
-    model = load_model(args.model, device)
+    model = load_model(args.model, device, args.model_size)
     dataset = ValDataset(args.data_dir)
     loader = torch.utils.data.DataLoader(
         dataset, batch_size=args.batch_size, shuffle=False,

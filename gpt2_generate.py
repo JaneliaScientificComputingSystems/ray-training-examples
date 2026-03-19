@@ -3,8 +3,8 @@
 GPT-2 text generation from a trained checkpoint.
 
 Usage:
-    python gpt2_generate.py --model ../models/gpt2_ddp_best.pth --prompt "The brain"
-    python gpt2_generate.py --model ../models/gpt2_ddp_best.pth --interactive
+    python gpt2_generate.py --model ../models/gpt2_small_ddp_best.pth --prompt "The brain"
+    python gpt2_generate.py --model ../models/gpt2_xl_ddp_best.pth --model-size=xl --interactive
 """
 import argparse
 import math
@@ -12,16 +12,16 @@ import torch
 import torch.nn as nn
 import tiktoken
 
-from gpt2_model import GPT2
+from gpt2_model import GPT2, GPT2_CONFIGS
 
 
 # ---------------------------------------------------------------------------
 # Generation
 # ---------------------------------------------------------------------------
 
-def load_model(path, device):
+def load_model(path, device, model_size="small"):
     ckpt = torch.load(path, map_location=device, weights_only=True)
-    model = GPT2()
+    model = GPT2(GPT2_CONFIGS[model_size])
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device).eval()
     val_loss = ckpt.get("val_loss", float("nan"))
@@ -59,6 +59,8 @@ def run_prompt(model, enc, prompt, args, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="Path to .pth checkpoint")
+    parser.add_argument("--model-size", choices=list(GPT2_CONFIGS.keys()), default="small",
+                        help="Model size (must match checkpoint)")
     parser.add_argument("--prompt", default="The",
                         help="Text prompt to continue")
     parser.add_argument("--max-tokens", type=int, default=200)
@@ -73,7 +75,7 @@ def main():
         "cuda" if torch.cuda.is_available() else "cpu"
     ) if args.device == "auto" else torch.device(args.device)
 
-    model = load_model(args.model, device)
+    model = load_model(args.model, device, args.model_size)
     enc = tiktoken.get_encoding("gpt2")
 
     if args.interactive:

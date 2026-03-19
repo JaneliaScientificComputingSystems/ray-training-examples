@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-GPT-2 small (117M) distributed training on OpenWebText.
+GPT-2 distributed training on OpenWebText (117M to 2.7B).
 Supports DDP and FSDP — toggle with --mode flag.
+Model size selected with --model-size (small/medium/large/xl/2b).
 Uses Ray Data for streaming data loading (official Ray Train pattern).
 Works on all Janelia GPU queues — IB and Ethernet NCCL.
 """
@@ -24,13 +25,15 @@ from ray.train.torch import TorchTrainer
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
-from gpt2_model import GPT2, Block, GPT2_CONFIG
+from gpt2_model import GPT2, Block, GPT2_CONFIGS
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--num-gpus",    type=int, required=True)
     parser.add_argument("--num-nodes",   type=int, required=True)
+    parser.add_argument("--model-size",  choices=list(GPT2_CONFIGS.keys()), default="small",
+                        help="Model size: small=117M, medium=345M, large=774M, xl=1.5B, 2b=2.7B")
     parser.add_argument("--mode",        choices=["ddp", "fsdp"], default="ddp",
                         help="DDP: replicated params. FSDP: sharded params")
     parser.add_argument("--batch-size",  type=int, default=8,
@@ -75,7 +78,8 @@ def save_checkpoint(model, optimizer, iter_num, val_loss, config,
     os.makedirs(model_dir, exist_ok=True)
     suffix = "best" if is_best else "latest"
     mode   = config.get("mode", "ddp")
-    path   = os.path.join(model_dir, f"gpt2_{mode}_{suffix}.pth")
+    size   = config.get("model_size", "small")
+    path   = os.path.join(model_dir, f"gpt2_{size}_{mode}_{suffix}.pth")
     raw    = model.module if hasattr(model, "module") else model
     torch.save({
         "iter_num":            iter_num,
@@ -110,7 +114,8 @@ def train_func(config):
     world_size = ray.train.get_context().get_world_size()
 
     # 1. Create model on CPU, prepare_model handles device + DDP + NCCL
-    model = GPT2()
+    model_cfg = GPT2_CONFIGS[config["model_size"]]
+    model = GPT2(model_cfg)
 
     if config["mode"] == "fsdp":
         device = ray.train.torch.get_device()
@@ -286,9 +291,11 @@ def main():
 
     model_dir = os.path.join(os.path.abspath(os.getcwd()), "..", "models")
 
+    model_cfg = GPT2_CONFIGS[args.model_size]
     ray.init(address="auto")
     nccl_ib = os.environ.get("NCCL_IB_DISABLE", "1")
     print(f"Ray: {ray.available_resources()}")
+    print(f"Model: GPT-2 {args.model_size} ({model_cfg['n_layer']}L, {model_cfg['n_embd']}D, {model_cfg['n_head']}H)")
     print(f"Mode: {args.mode.upper()} | Network: "
           f"{'InfiniBand' if nccl_ib == '0' else 'Ethernet'}")
 
@@ -312,12 +319,13 @@ def main():
         num_workers=args.num_gpus, use_gpu=True,
         resources_per_worker={"CPU": 7, "GPU": 1})
     run_config = RunConfig(
-        name=f"gpt2_{args.mode}",
+        name=f"gpt2_{args.model_size}_{args.mode}",
         storage_path=f"/scratch/{os.getenv('USER','unknown')}/ray_results")
 
     trainer = TorchTrainer(
         train_loop_per_worker=train_func,
         train_loop_config={
+            "model_size":    args.model_size,
             "mode":          args.mode,
             "batch_size":    args.batch_size,
             "seq_len":       args.seq_len,
