@@ -206,7 +206,9 @@ blaunch -z \$head_node "
     ray start --head --port \$port \
         --num-cpus=${CPUS_PER_NODE} \
         --num-gpus=${GPUS_PER_NODE} \
-        --temp-dir=/scratch/\$(whoami)/ray_\$(whoami)
+        --temp-dir=/scratch/\$(whoami)/ray_\$(whoami) \
+        --dashboard-agent-grpc-port=20100 \
+        --dashboard-agent-listen-port=20101
 " &
 
 sleep 20
@@ -225,7 +227,9 @@ if [ ${NUM_NODES} -gt 1 ]; then
             ray start --address \$head_node:\$port \
                 --num-cpus=${CPUS_PER_NODE} \
                 --num-gpus=${GPUS_PER_NODE} \
-                --temp-dir=/scratch/\$(whoami)/ray_\$(whoami)
+                --temp-dir=/scratch/\$(whoami)/ray_\$(whoami) \
+                --dashboard-agent-grpc-port=20100 \
+                --dashboard-agent-listen-port=20101
         " &
         sleep 10
         while ! blaunch -z \$host ray status --address \$head_node:\$port 2>/dev/null; do
