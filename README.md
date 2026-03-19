@@ -47,6 +47,7 @@ pip install datasets tiktoken
 | File | Description |
 |------|-------------|
 | `submit_ray_job.sh` | LSF job submission — auto-configures NCCL per queue |
+| `run_inference.sh` | LSF job submission for inference (single GPU) |
 | `cifar10_distributed_training.py` | ResNet-18 on CIFAR-10 — multi-node DDP |
 | `prepare_openwebtext.sh` | Downloads and tokenizes OpenWebText for GPT-2 |
 | `gpt2_distributed_training.py` | GPT-2 small (117M) — DDP and FSDP modes |
@@ -130,9 +131,16 @@ tar -xzf cifar-10-python.tar.gz && rm cifar-10-python.tar.gz
 
 ### Inference
 
+Inference scripts require a GPU — run them as LSF jobs, not on the login node:
+
 ```bash
-python image_classifier.py --model ./models/cifar10_resnet18_best.pth --test
-python image_classifier.py --model ./models/cifar10_resnet18_best.pth --image photo.jpg
+# Test on CIFAR-10 samples
+./run_inference.sh --venv=~/ray_env --script=image_classifier.py -- \
+    --model ./models/cifar10_resnet18_best.pth --test
+
+# Classify a single image
+./run_inference.sh --venv=~/ray_env --script=image_classifier.py -- \
+    --model ./models/cifar10_resnet18_best.pth --image photo.jpg
 ```
 
 ---
@@ -196,9 +204,17 @@ GPT-2 uses iteration count, not epochs. Each iteration processes `batch_size × 
 ### Evaluate & Generate
 
 ```bash
-python gpt2_eval.py --model ./models/gpt2_ddp_best.pth --num-batches 200
-python gpt2_generate.py --model ./models/gpt2_ddp_best.pth --prompt "The brain"
-python gpt2_generate.py --model ./models/gpt2_ddp_best.pth --interactive
+# Perplexity evaluation
+./run_inference.sh --venv=~/ray_env --script=gpt2_eval.py -- \
+    --model ./models/gpt2_ddp_best.pth --num-batches 200
+
+# Text generation
+./run_inference.sh --venv=~/ray_env --script=gpt2_generate.py -- \
+    --model ./models/gpt2_ddp_best.pth --prompt "The brain"
+
+# Interactive mode
+./run_inference.sh --venv=~/ray_env --script=gpt2_generate.py -- \
+    --model ./models/gpt2_ddp_best.pth --interactive
 ```
 
 ---
@@ -211,7 +227,7 @@ python gpt2_generate.py --model ./models/gpt2_ddp_best.pth --interactive
 
 ### What the training does
 
-Trains ResNet-50 (25.6M parameters) using DDP with large-batch SGD (momentum 0.9, weight decay 1e-4). Learning rate is linearly scaled by effective batch size (lr = base_lr × effective_batch / 256) with linear warmup and cosine decay. Mixed precision (bfloat16) with GradScaler. Data is streamed via Ray Data from parquet shards — no DataLoader subprocesses or memmapping. Each training step produces ~100 MB of gradient data synchronized via allreduce, creating sustained IB traffic at scale.
+Trains ResNet-50 (25.6M parameters) using DDP with large-batch SGD (momentum 0.9, weight decay 1e-4). Learning rate is linearly scaled by effective batch size (lr = base_lr × effective_batch / 256) with linear warmup and cosine decay. Mixed precision (bfloat16). Data is streamed via Ray Data from parquet shards — no DataLoader subprocesses or memmapping. Each training step produces ~100 MB of gradient data synchronized via allreduce, creating sustained IB traffic at scale.
 
 ### What it produces
 
@@ -264,8 +280,11 @@ export HF_TOKEN="hf_..."
 ### Inference
 
 ```bash
-python imagenet_classifier.py --model ./models/resnet50_imagenet_best.pth --test
-python imagenet_classifier.py --model ./models/resnet50_imagenet_best.pth --image photo.jpg
+./run_inference.sh --venv=~/ray_env --script=imagenet_classifier.py -- \
+    --model ./models/resnet50_imagenet_best.pth --test
+
+./run_inference.sh --venv=~/ray_env --script=imagenet_classifier.py -- \
+    --model ./models/resnet50_imagenet_best.pth --image photo.jpg
 ```
 
 ### Batch size reference
