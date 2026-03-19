@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 import torchvision
 import torchvision.transforms as transforms
-from ray.train import DataConfig, ScalingConfig, RunConfig
+from ray.train import ScalingConfig, RunConfig
 from ray.train.torch import TorchTrainer
 
 
@@ -386,7 +386,6 @@ def main():
             "model_dir":         model_dir,
         },
         datasets={"train": train_ds, "val": val_ds},
-        dataset_config=DataConfig(datasets_to_split="all", enable_shard_locality=False),
         scaling_config=scaling_config,
         run_config=run_config,
     )
