@@ -2,7 +2,7 @@
 #===============================================================================
 # Download ImageNet-1K (ILSVRC2012) from HuggingFace
 #
-# Downloads ~138 GB to /nrs/scicompsys/Goran/imagenet
+# Downloads ~138 GB to /nrs/ml_datasets/imagenet
 # Requires HuggingFace token with access to ILSVRC/imagenet-1k
 #
 # Before running:
@@ -16,11 +16,11 @@
 #
 # Defaults:
 #   venv:     ~/ray_env
-#   data-dir: /nrs/scicompsys/Goran/imagenet
+#   data-dir: /nrs/ml_datasets/imagenet
 #===============================================================================
 
 VENV_PATH="${HOME}/ray_env"
-DATA_DIR="/nrs/scicompsys/Goran/imagenet"
+DATA_DIR="/nrs/ml_datasets/imagenet"
 
 while [[ $# -gt 0 ]]; do
     case $1 in

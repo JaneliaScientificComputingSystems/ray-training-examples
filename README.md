@@ -96,7 +96,7 @@ Trains a ResNet-18 (11M parameters) image classifier using Distributed Data Para
 
 ### Data
 
-CIFAR-10 is available at `/nrs/scicompsys/Goran/cifar10` (shared NFS). Training scripts use this by default — no setup required.
+CIFAR-10 is available at `/nrs/ml_datasets/cifar10` (shared NFS). Training scripts use this by default — no setup required.
 
 To prepare your own copy (one-time, ~170 MB):
 
@@ -164,7 +164,7 @@ Trains GPT-2 small (117M parameters, 12 layers, 768 hidden dim, 12 attention hea
 
 ### Data
 
-Tokenized OpenWebText is available at `/nrs/scicompsys/Goran/openwebtext` (shared NFS). Training scripts use this by default — no setup required.
+Tokenized OpenWebText is available at `/nrs/ml_datasets/openwebtext` (shared NFS). Training scripts use this by default — no setup required.
 
 To prepare your own copy (one-time, ~30 min, ~9 GB):
 
@@ -238,7 +238,7 @@ Trains ResNet-50 (25.6M parameters) using DDP with large-batch SGD (momentum 0.9
 
 ### Data
 
-ImageNet-1K is available at `/nrs/scicompsys/Goran/imagenet` (shared NFS, ~138 GB). Training scripts use this by default — no setup required.
+ImageNet-1K is available at `/nrs/ml_datasets/imagenet` (shared NFS, ~138 GB). Training scripts use this by default — no setup required.
 
 To prepare your own copy (one-time, ~15 min):
 

@@ -21,7 +21,7 @@ CLASSES = [
     "dog", "frog", "horse", "ship", "truck",
 ]
 
-DATA_DIR = "/nrs/scicompsys/Goran/cifar10"
+DATA_DIR = "/nrs/ml_datasets/cifar10"
 
 
 def load_model(path, device):

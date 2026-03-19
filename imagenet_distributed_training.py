@@ -39,7 +39,7 @@ def parse_args():
     parser.add_argument("--eval-interval", type=int, default=5,
                         help="evaluate every N epochs")
     parser.add_argument("--data-dir",    type=str,
-                        default="/nrs/scicompsys/Goran/imagenet")
+                        default="/nrs/ml_datasets/imagenet")
     return parser.parse_args()
 
 

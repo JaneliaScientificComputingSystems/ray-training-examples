@@ -34,7 +34,7 @@ def get_cifar10_dataloaders(batch_size, world_size, rank):
     num_workers scales with available CPUs: 8 for H100/H200 (96 CPUs),
     4 for L4 (64 CPUs), safe default 4 otherwise.
     """
-    data_path = "/nrs/scicompsys/Goran/cifar10"
+    data_path = "/nrs/ml_datasets/cifar10"
 
     transform_train = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
@@ -249,7 +249,7 @@ def train_func(config):
 def main():
     args = parse_args()
 
-    dataset_path = "/nrs/scicompsys/Goran/cifar10"
+    dataset_path = "/nrs/ml_datasets/cifar10"
     if not os.path.exists(os.path.join(dataset_path, "cifar-10-batches-py")):
         print(f"ERROR: CIFAR-10 dataset not found at {dataset_path}")
         print("Run the dataset setup step first.")

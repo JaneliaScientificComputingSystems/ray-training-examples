@@ -15,7 +15,7 @@ import torchvision
 import torchvision.transforms as transforms
 from PIL import Image
 
-DATA_DIR = "/nrs/scicompsys/Goran/imagenet"
+DATA_DIR = "/nrs/ml_datasets/imagenet"
 
 # ImageNet class index — loaded lazily from checkpoint dir or torchvision
 _CLASS_NAMES = None

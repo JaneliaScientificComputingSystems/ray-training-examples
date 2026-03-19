@@ -70,7 +70,7 @@ def load_model(path, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, help="Path to .pth checkpoint")
-    parser.add_argument("--data-dir", default="/nrs/scicompsys/Goran/openwebtext")
+    parser.add_argument("--data-dir", default="/nrs/ml_datasets/openwebtext")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-batches", type=int, default=None,
                         help="Limit eval batches (default: full val set)")

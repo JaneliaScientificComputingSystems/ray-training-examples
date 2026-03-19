@@ -46,7 +46,7 @@ def parse_args():
     parser.add_argument("--save-models", action="store_true")
     parser.add_argument("--resume",      type=str, default=None)
     parser.add_argument("--data-dir",    type=str,
-                        default="/nrs/scicompsys/Goran/openwebtext")
+                        default="/nrs/ml_datasets/openwebtext")
     return parser.parse_args()
 
 

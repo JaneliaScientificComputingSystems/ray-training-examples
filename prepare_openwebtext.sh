@@ -10,7 +10,7 @@
 #
 # Defaults:
 #   venv:     ~/ray_env
-#   data-dir: /nrs/scicompsys/Goran/openwebtext
+#   data-dir: /nrs/ml_datasets/openwebtext
 #
 # Output:
 #   <data-dir>/train/*.parquet  (~9 GB, ~4.5B tokens)
@@ -18,7 +18,7 @@
 #===============================================================================
 
 VENV_PATH="${HOME}/ray_env"
-DATA_DIR="/nrs/scicompsys/Goran/openwebtext"
+DATA_DIR="/nrs/ml_datasets/openwebtext"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
