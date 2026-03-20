@@ -7,17 +7,26 @@
 #   ./submit_ray_job.sh <num_nodes> --script=SCRIPT [options] [-- script_args...]
 #
 # Examples:
+#   # Multi-node on parallel queues (whole nodes, all GPUs):
 #   ./submit_ray_job.sh 2 --script=test_ray_cluster.py
 #   ./submit_ray_job.sh 8 --queue=gpu_h200_parallel --venv=~/ray_env \
 #       --script=train_ray.py -- --epochs=50
-#   ./submit_ray_job.sh 4 --queue=gpu_l4_parallel --venv=~/ray_env \
-#       --script=train_ray.py -- --epochs=20 --batch-size=128
 #
-# Queue auto-configuration:
+#   # Single-node on non-parallel queues (request specific GPU count):
+#   ./submit_ray_job.sh 1 --queue=gpu_h100 --num-gpus=2 --venv=~/ray_env \
+#       --script=train_ray.py -- --epochs=20
+#
+# Parallel queues (whole nodes, multi-node):
 #   gpu_h200_parallel  -> 96 CPUs, 8 GPUs, InfiniBand NCCL
 #   gpu_h100_parallel  -> 96 CPUs, 8 GPUs, InfiniBand NCCL  [default]
 #   gpu_l4_parallel    -> 64 CPUs, 8 GPUs, Ethernet NCCL
 #   gpu_a100_parallel  -> 48 CPUs, 4 GPUs, Ethernet NCCL
+#
+# Non-parallel queues (single node, flexible GPU count):
+#   gpu_h200           -> use --num-gpus=N (1-8), InfiniBand NCCL
+#   gpu_h100           -> use --num-gpus=N (1-8), InfiniBand NCCL
+#   gpu_l4             -> use --num-gpus=N (1-8), Ethernet NCCL
+#   gpu_a100           -> use --num-gpus=N (1-4), Ethernet NCCL
 #===============================================================================
 
 usage() {
@@ -29,12 +38,14 @@ usage() {
     echo ""
     echo "Optional:"
     echo "  --queue=QUEUE        LSF queue (default: gpu_h100_parallel)"
+    echo "  --num-gpus=N         GPUs to request (non-parallel queues only, default: all)"
     echo "  --job-name=NAME      Job name (default: ray_job)"
     echo "  --walltime=TIME      Walltime in hours (default: auto)"
     echo "  --venv=PATH          Python venv path"
     echo ""
     echo "Script arguments: use '--' separator"
     echo "  Example: $0 2 --script=train.py -- --epochs=50 --batch-size=128"
+    echo "  Example: $0 1 --queue=gpu_h100 --num-gpus=2 --script=train.py -- --epochs=10"
     exit 1
 }
 
@@ -49,11 +60,13 @@ JOB_NAME="ray_job"
 WALLTIME=""
 VENV_PATH=""
 SCRIPT_ARGS=""
+USER_NUM_GPUS=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --queue=*)    QUEUE_NAME="${1#*=}"; shift ;;
         --script=*)   PYTHON_SCRIPT="${1#*=}"; shift ;;
+        --num-gpus=*) USER_NUM_GPUS="${1#*=}"; shift ;;
         --job-name=*) JOB_NAME="${1#*=}"; shift ;;
         --walltime=*) WALLTIME="${1#*=}"; shift ;;
         --venv=*)     VENV_PATH="${1#*=}"; shift ;;
@@ -66,7 +79,9 @@ if [ -z "$PYTHON_SCRIPT" ]; then echo "ERROR: --script is required"; usage; fi
 if [ ! -f "$PYTHON_SCRIPT" ]; then echo "ERROR: Script not found: $PYTHON_SCRIPT"; exit 1; fi
 
 # Auto-configure resources and network backend per queue
+PARALLEL_QUEUE=true
 case $QUEUE_NAME in
+    # Parallel queues — whole nodes, multi-node capable
     gpu_h200_parallel|gpu_h100_parallel)
         CPUS_PER_NODE=96
         GPUS_PER_NODE=8
@@ -85,12 +100,40 @@ case $QUEUE_NAME in
         APP_PROFILE="parallel-48"
         NETWORK_BACKEND="ETH"
         ;;
+    # Non-parallel queues — single node, flexible GPU count
+    gpu_h200|gpu_h100)
+        PARALLEL_QUEUE=false
+        GPUS_PER_NODE=${USER_NUM_GPUS:-8}
+        CPUS_PER_NODE=$((GPUS_PER_NODE * 12))
+        APP_PROFILE=""
+        NETWORK_BACKEND="IB"
+        ;;
+    gpu_l4|gpu_l4_large|gpu_l4_16)
+        PARALLEL_QUEUE=false
+        GPUS_PER_NODE=${USER_NUM_GPUS:-8}
+        CPUS_PER_NODE=$((GPUS_PER_NODE * 8))
+        APP_PROFILE=""
+        NETWORK_BACKEND="ETH"
+        ;;
+    gpu_a100)
+        PARALLEL_QUEUE=false
+        GPUS_PER_NODE=${USER_NUM_GPUS:-4}
+        CPUS_PER_NODE=$((GPUS_PER_NODE * 12))
+        APP_PROFILE=""
+        NETWORK_BACKEND="ETH"
+        ;;
     *)
         echo "ERROR: Unsupported queue: $QUEUE_NAME"
-        echo "Supported: gpu_h200_parallel, gpu_h100_parallel, gpu_l4_parallel, gpu_a100_parallel"
+        echo "Parallel:     gpu_h200_parallel, gpu_h100_parallel, gpu_l4_parallel, gpu_a100_parallel"
+        echo "Non-parallel: gpu_h200, gpu_h100, gpu_l4, gpu_a100 (use --num-gpus=N)"
         exit 1
         ;;
 esac
+
+if [ "$PARALLEL_QUEUE" = false ] && [ $NUM_NODES -gt 1 ]; then
+    echo "ERROR: Non-parallel queues only support 1 node. Use a parallel queue for multi-node."
+    exit 1
+fi
 
 TOTAL_CPUS=$((NUM_NODES * CPUS_PER_NODE))
 TOTAL_GPUS=$((NUM_NODES * GPUS_PER_NODE))
@@ -109,14 +152,23 @@ echo "Total CPUs:      $TOTAL_CPUS"
 echo "Walltime:        $WALLTIME"
 echo "================================================================"
 
+APP_LINE=""
+SPAN_LINE=""
+if [ -n "$APP_PROFILE" ]; then
+    APP_LINE="#BSUB -app ${APP_PROFILE}"
+fi
+if [ "$PARALLEL_QUEUE" = true ]; then
+    SPAN_LINE="#BSUB -R \"span[ptile=${CPUS_PER_NODE}]\""
+fi
+
 cat << EOF | bsub
 #!/bin/bash
 #BSUB -J ${JOB_NAME}_${NUM_NODES}nodes
 #BSUB -n ${TOTAL_CPUS}
-#BSUB -app ${APP_PROFILE}
+${APP_LINE}
 #BSUB -q ${QUEUE_NAME}
 #BSUB -gpu "num=${GPUS_PER_NODE}:mode=exclusive_process"
-#BSUB -R "span[ptile=${CPUS_PER_NODE}]"
+${SPAN_LINE}
 #BSUB -o ../output/${JOB_NAME}_%J.out
 #BSUB -e ../output/${JOB_NAME}_%J.err
 #BSUB -W ${WALLTIME}
