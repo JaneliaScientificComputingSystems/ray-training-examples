@@ -346,10 +346,15 @@ def train_func(config):
 
     # 1. Create model — pretrained Swin backbone + random segmentation head
     model = SwinSegModel(pretrained=config.get("pretrained", True), num_classes=3)
-    model = ray.train.torch.prepare_model(
-        model, ddp_kwargs={"find_unused_parameters": True})
-
+    # Wrap DDP manually with find_unused_parameters for Swin backbone
+    # (Swin's original classification layers aren't used by our segmentation head)
     device = ray.train.torch.get_device()
+    model = model.to(device)
+    import torch.distributed as dist
+    if dist.is_initialized() and world_size > 1:
+        model = torch.nn.parallel.DistributedDataParallel(
+            model, device_ids=[device], find_unused_parameters=True)
+
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     scaler = torch.amp.GradScaler("cuda", enabled=(dtype == torch.float16))
 
