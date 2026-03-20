@@ -2,7 +2,7 @@
 
 Distributed PyTorch training with Ray on Janelia's GPU cluster. Uses InfiniBand NDR (400 Gb/s) with GPUDirect RDMA on H200/H100 nodes for high-performance multi-node training.
 
-Four ready-to-run examples that progressively exercise the cluster:
+Five ready-to-run examples that progressively exercise the cluster:
 
 | Example | Model | Dataset | Purpose |
 |---------|-------|---------|---------|
@@ -10,6 +10,7 @@ Four ready-to-run examples that progressively exercise the cluster:
 | GPT-2 | GPT-2 small–2.7B | OpenWebText, 9 GB | Language model — scales from quick tests to full IB stress tests |
 | ImageNet ResNet | ResNet-50 (25.6M) | ImageNet-1K, 138 GB | Industry-standard CNN benchmark |
 | ImageNet ViT | ViT base–huge (86M–632M) | ImageNet-1K, 138 GB | Vision Transformer — modern architecture, heavier IB load |
+| Cell Segmentation | Swin-B (88M) | LIVECell, 2 GB | Fine-tuning a pretrained model for microscopy — transfer learning |
 
 ---
 
@@ -58,6 +59,9 @@ pip install datasets tiktoken
 | `vit_imagenet_distributed_training.py` | ViT (86M–632M) on ImageNet-1K — Vision Transformer DDP |
 | `imagenet_classifier.py` | ImageNet inference (ResNet-50) with trained checkpoints |
 | `vit_imagenet_classifier.py` | ImageNet inference (ViT) with trained checkpoints |
+| `prepare_livecell.sh` | Downloads LIVECell dataset (already done — for reference) |
+| `livecell_finetune.py` | Swin-B fine-tuning on LIVECell — cell segmentation |
+| `cell_segmenter.py` | Cell segmentation inference — produces colored masks |
 
 ---
 
@@ -423,6 +427,73 @@ Same ImageNet-1K dataset as the ResNet-50 example — pre-installed at `/nrs/ml_
 | H200 (141 GB) | 64–128 |
 | H100 (80 GB) | 32–64 |
 | A100 (40/80 GB) | 16–32 |
+
+---
+
+## Example 5: Cell Segmentation (Swin + LIVECell)
+
+### About the example
+
+This example demonstrates **transfer learning** — the practical workflow most researchers actually use. Instead of training from scratch, we take a Swin Transformer pretrained on ImageNet and fine-tune it for cell segmentation on microscopy images.
+
+The model predicts three classes per pixel: background, cell interior, and cell boundary. Post-processing (watershed) converts the predictions into individual cell instances with colored masks.
+
+### About the dataset
+
+[LIVECell](https://www.nature.com/articles/s41592-021-01249-6) is 5,239 phase contrast microscopy images with 1.6 million manually annotated cell boundaries across 8 cell types (A172, BT474, BV2, Huh7, MCF7, SHSY5Y, SkBr3, SKOV3). Published in Nature Methods.
+
+### What it demonstrates
+
+- **Transfer learning:** Pretrained ImageNet backbone → fine-tune on domain data
+- **Differential learning rates:** Backbone gets 10x lower LR than the new segmentation head
+- **Segmentation pipeline:** From raw microscopy image to colored cell masks
+- **The pattern researchers would use:** swap LIVECell for your own microscopy data
+
+### Data
+
+LIVECell is pre-installed at `/nrs/ml_datasets/livecell` (shared NFS, ~2 GB).
+
+### Train
+
+```bash
+# Fine-tune on 2 H100 nodes (16 GPUs) — 50 epochs
+./submit_ray_job.sh 2 --queue=gpu_h100_parallel --venv=~/ray_env \
+    --job-name=livecell \
+    --script=livecell_finetune.py -- \
+    --num-gpus=16 --num-nodes=2 --epochs=50 --batch-size=4 --save-models
+
+# Single A100 node (4 GPUs) — good for development
+./submit_ray_job.sh 1 --queue=gpu_a100_parallel --venv=~/ray_env \
+    --job-name=livecell \
+    --script=livecell_finetune.py -- \
+    --num-gpus=4 --num-nodes=1 --epochs=50 --batch-size=4 --save-models
+
+# Train from scratch (no pretrained backbone) — for comparison
+./submit_ray_job.sh 2 --queue=gpu_h100_parallel --venv=~/ray_env \
+    --job-name=livecell_scratch \
+    --script=livecell_finetune.py -- \
+    --num-gpus=16 --num-nodes=2 --epochs=50 --batch-size=4 --save-models --no-pretrained
+```
+
+### Inference
+
+The segmenter takes a microscopy image and produces a colored overlay with individual cell instances:
+
+```bash
+# Test on LIVECell test images
+./run_inference.sh --venv=~/ray_env --script=cell_segmenter.py -- \
+    --model ../models/swin_livecell_best.pth --test
+
+# Segment your own microscopy image
+./run_inference.sh --venv=~/ray_env --script=cell_segmenter.py -- \
+    --model ../models/swin_livecell_best.pth --image cells.tif
+
+# Process a directory of images
+./run_inference.sh --venv=~/ray_env --script=cell_segmenter.py -- \
+    --model ../models/swin_livecell_best.pth --image-dir ./my_images/
+```
+
+Output segmented images are saved to `../output/segmentation/`.
 
 ---
 
