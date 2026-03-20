@@ -38,9 +38,10 @@ usage() {
     echo ""
     echo "Optional:"
     echo "  --queue=QUEUE        LSF queue (default: gpu_h100_parallel)"
-    echo "  --num-gpus=N         GPUs to request (non-parallel queues only, default: all)"
+    echo "  --num-gpus=N         GPUs to request (non-parallel queues, default: 1)"
+    echo "  --num-cpus=N         CPUs to request (non-parallel queues, default: 12 per GPU)"
     echo "  --job-name=NAME      Job name (default: ray_job)"
-    echo "  --walltime=TIME      Walltime in hours (default: auto)"
+    echo "  --walltime=TIME      Walltime in hours (default: 24:00 non-parallel, auto parallel)"
     echo "  --venv=PATH          Python venv path"
     echo ""
     echo "Script arguments: use '--' separator"
@@ -61,12 +62,14 @@ WALLTIME=""
 VENV_PATH=""
 SCRIPT_ARGS=""
 USER_NUM_GPUS=""
+USER_NUM_CPUS=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --queue=*)    QUEUE_NAME="${1#*=}"; shift ;;
         --script=*)   PYTHON_SCRIPT="${1#*=}"; shift ;;
         --num-gpus=*) USER_NUM_GPUS="${1#*=}"; shift ;;
+        --num-cpus=*) USER_NUM_CPUS="${1#*=}"; shift ;;
         --job-name=*) JOB_NAME="${1#*=}"; shift ;;
         --walltime=*) WALLTIME="${1#*=}"; shift ;;
         --venv=*)     VENV_PATH="${1#*=}"; shift ;;
@@ -101,24 +104,25 @@ case $QUEUE_NAME in
         NETWORK_BACKEND="ETH"
         ;;
     # Non-parallel queues — single node, flexible GPU count
+    # Defaults: 1 GPU, 12 CPUs per GPU, 24h walltime
     gpu_h200|gpu_h100)
         PARALLEL_QUEUE=false
-        GPUS_PER_NODE=${USER_NUM_GPUS:-8}
-        CPUS_PER_NODE=$((GPUS_PER_NODE * 12))
+        GPUS_PER_NODE=${USER_NUM_GPUS:-1}
+        CPUS_PER_NODE=${USER_NUM_CPUS:-$((GPUS_PER_NODE * 12))}
         APP_PROFILE=""
         NETWORK_BACKEND="IB"
         ;;
     gpu_l4|gpu_l4_large|gpu_l4_16)
         PARALLEL_QUEUE=false
-        GPUS_PER_NODE=${USER_NUM_GPUS:-8}
-        CPUS_PER_NODE=$((GPUS_PER_NODE * 8))
+        GPUS_PER_NODE=${USER_NUM_GPUS:-1}
+        CPUS_PER_NODE=${USER_NUM_CPUS:-$((GPUS_PER_NODE * 8))}
         APP_PROFILE=""
         NETWORK_BACKEND="ETH"
         ;;
     gpu_a100)
         PARALLEL_QUEUE=false
-        GPUS_PER_NODE=${USER_NUM_GPUS:-4}
-        CPUS_PER_NODE=$((GPUS_PER_NODE * 12))
+        GPUS_PER_NODE=${USER_NUM_GPUS:-1}
+        CPUS_PER_NODE=${USER_NUM_CPUS:-$((GPUS_PER_NODE * 12))}
         APP_PROFILE=""
         NETWORK_BACKEND="ETH"
         ;;
@@ -137,8 +141,15 @@ fi
 
 TOTAL_CPUS=$((NUM_NODES * CPUS_PER_NODE))
 TOTAL_GPUS=$((NUM_NODES * GPUS_PER_NODE))
-[ -z "$WALLTIME" ] && { [ $NUM_NODES -le 2 ] && WALLTIME="4:00" || WALLTIME="8:00"; }
 
+# Default walltime: parallel queues auto-scale, non-parallel 24h
+if [ -z "$WALLTIME" ]; then
+    if [ "$PARALLEL_QUEUE" = true ]; then
+        [ $NUM_NODES -le 2 ] && WALLTIME="4:00" || WALLTIME="8:00"
+    else
+        WALLTIME="24:00"
+    fi
+fi
 echo "================================================================"
 echo "Ray Cluster Job Submission"
 echo "================================================================"
