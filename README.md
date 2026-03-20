@@ -2,13 +2,14 @@
 
 Distributed PyTorch training with Ray on Janelia's GPU cluster. Uses InfiniBand NDR (400 Gb/s) with GPUDirect RDMA on H200/H100 nodes for high-performance multi-node training.
 
-Three ready-to-run examples that progressively exercise the cluster:
+Four ready-to-run examples that progressively exercise the cluster:
 
 | Example | Model | Dataset | Purpose |
 |---------|-------|---------|---------|
 | CIFAR-10 | ResNet-18 (11M) | 60K images, 170 MB | Quick smoke test — minutes on 2 nodes |
 | GPT-2 | GPT-2 small–2.7B | OpenWebText, 9 GB | Language model — scales from quick tests to full IB stress tests |
-| ImageNet | ResNet-50 (25.6M) | ImageNet-1K, 138 GB | Industry-standard benchmark for cluster validation |
+| ImageNet ResNet | ResNet-50 (25.6M) | ImageNet-1K, 138 GB | Industry-standard CNN benchmark |
+| ImageNet ViT | ViT base–huge (86M–632M) | ImageNet-1K, 138 GB | Vision Transformer — modern architecture, heavier IB load |
 
 ---
 
@@ -54,7 +55,9 @@ pip install datasets tiktoken
 | `image_classifier.py` | CIFAR-10 inference with trained checkpoints |
 | `gpt2_eval.py` | GPT-2 perplexity evaluation on val set |
 | `gpt2_generate.py` | GPT-2 text generation from checkpoints |
-| `imagenet_classifier.py` | ImageNet inference with trained checkpoints |
+| `vit_imagenet_distributed_training.py` | ViT (86M–632M) on ImageNet-1K — Vision Transformer DDP |
+| `imagenet_classifier.py` | ImageNet inference (ResNet-50) with trained checkpoints |
+| `vit_imagenet_classifier.py` | ImageNet inference (ViT) with trained checkpoints |
 
 ---
 
@@ -348,6 +351,78 @@ LR is automatically scaled: `lr = base_lr * effective_batch / 256`.
 |-----|--------------|
 | H200 (141 GB) | 128–256 |
 | H100 (80 GB) | 128 |
+
+---
+
+## Example 4: ViT on ImageNet-1K
+
+### About the model
+
+The Vision Transformer (ViT) applies the transformer architecture — the same architecture behind GPT and LLaMA — to image classification. Instead of convolutional layers (ResNet), ViT splits images into 16x16 pixel patches, treats each patch as a token, and processes them through transformer layers with self-attention. This gives every patch global context from the first layer.
+
+Three model sizes are available via `--model-size`:
+
+| Size | Layers | Heads | Dim | Params | Allreduce/step |
+|------|--------|-------|-----|--------|----------------|
+| `base` | 12 | 12 | 768 | 86M | ~0.3 GB |
+| `large` | 24 | 16 | 1024 | 307M | ~1.2 GB |
+| `huge` | 32 | 16 | 1280 | 632M | ~2.5 GB |
+
+### What the training does
+
+Trains ViT on ImageNet-1K using DDP with AdamW optimizer (standard for transformers, unlike SGD for ResNet). Learning rate is scaled linearly by effective batch size / 1024 with linear warmup and cosine decay. Gradient clipping (1.0) is applied for training stability. Same ImageNet data pipeline as the ResNet-50 example.
+
+### What it produces
+
+- Training logs with per-epoch top-1 accuracy, loss, and images/sec throughput
+- Model checkpoints (`.pth` files) saved to `../models/`
+- Trained models can be used with `vit_imagenet_classifier.py` for inference
+
+### Data
+
+Same ImageNet-1K dataset as the ResNet-50 example — pre-installed at `/nrs/ml_datasets/imagenet`.
+
+### Train
+
+```bash
+# ViT-Large, 2 nodes, 16 GPUs — validation run
+./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
+    --job-name=vit_large \
+    --script=vit_imagenet_distributed_training.py -- \
+    --num-gpus=16 --num-nodes=2 --model-size=large --epochs=3 --batch-size=32 --save-models
+
+# ViT-Large, full 90 epochs
+./submit_ray_job.sh 2 --queue=gpu_h200_parallel --venv=~/ray_env \
+    --job-name=vit_large \
+    --script=vit_imagenet_distributed_training.py -- \
+    --num-gpus=16 --num-nodes=2 --model-size=large --epochs=90 --batch-size=32 --save-models
+
+# ViT-Huge, 7 nodes, 56 GPUs — heaviest vision workload
+./submit_ray_job.sh 7 --queue=gpu_h100_parallel --venv=~/ray_env \
+    --job-name=vit_huge \
+    --script=vit_imagenet_distributed_training.py -- \
+    --num-gpus=56 --num-nodes=7 --model-size=huge --epochs=90 --batch-size=16 --save-models
+```
+
+### Inference
+
+```bash
+# Test on ImageNet validation samples
+./run_inference.sh --venv=~/ray_env --script=vit_imagenet_classifier.py -- \
+    --model ../models/vit_large_imagenet_best.pth --test
+
+# Classify your own image
+./run_inference.sh --venv=~/ray_env --script=vit_imagenet_classifier.py -- \
+    --model ../models/vit_large_imagenet_best.pth --image photo.jpg
+```
+
+### Batch size reference (ViT-Large)
+
+| GPU | Per-GPU batch |
+|-----|--------------|
+| H200 (141 GB) | 64–128 |
+| H100 (80 GB) | 32–64 |
+| A100 (40/80 GB) | 16–32 |
 
 ---
 
