@@ -346,7 +346,8 @@ def train_func(config):
 
     # 1. Create model — pretrained Swin backbone + random segmentation head
     model = SwinSegModel(pretrained=config.get("pretrained", True), num_classes=3)
-    model = ray.train.torch.prepare_model(model)
+    model = ray.train.torch.prepare_model(
+        model, ddp_kwargs={"find_unused_parameters": True})
 
     device = ray.train.torch.get_device()
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
@@ -510,36 +511,44 @@ def train_func(config):
 # ---------------------------------------------------------------------------
 
 def prepare_dataset(data_dir, split="train"):
-    """Build a Ray Dataset from LIVECell images + COCO annotations.
-    Precomputes semantic masks and stores image bytes + mask bytes.
+    """Build a Ray Dataset from LIVECell images + precomputed masks.
+    Masks must be precomputed with prepare_livecell_masks.py first.
     """
     ann_file = os.path.join(data_dir, f"livecell_coco_{split}.json")
+    mask_dir = os.path.join(data_dir, "masks", split)
     image_dir = os.path.join(data_dir, "images", "livecell_train_val_images"
                              if split in ("train", "val")
                              else "livecell_test_images")
 
     if not os.path.exists(ann_file):
         raise FileNotFoundError(f"Annotation file not found: {ann_file}")
+    if not os.path.isdir(mask_dir):
+        raise FileNotFoundError(
+            f"Precomputed masks not found at {mask_dir}\n"
+            f"Run: python prepare_livecell_masks.py --data-dir={data_dir}")
 
-    print(f"Loading {split} annotations from {ann_file}...")
-    coco, img_anns, img_info = coco_to_semantic_mask(ann_file, image_dir)
+    print(f"Loading {split} from {image_dir} + {mask_dir}...")
+    with open(ann_file) as f:
+        coco = json.load(f)
+
+    img_info = {img["id"]: img for img in coco["images"]}
 
     records = []
     for img_id, info in img_info.items():
         fname = info["file_name"]
         fpath = os.path.join(image_dir, fname)
-        if not os.path.exists(fpath):
+        base = os.path.splitext(fname)[0]
+        mpath = os.path.join(mask_dir, f"{base}.npy")
+
+        if not os.path.exists(fpath) or not os.path.exists(mpath):
             continue
 
         h, w = info["height"], info["width"]
-        anns = img_anns.get(img_id, [])
 
-        # Read image bytes
         with open(fpath, "rb") as f:
             img_bytes = f.read()
 
-        # Create semantic mask
-        mask = create_semantic_mask(anns, h, w)
+        mask = np.load(mpath)
         mask_bytes = mask.tobytes()
 
         records.append({
@@ -550,7 +559,7 @@ def prepare_dataset(data_dir, split="train"):
             "file_name": fname,
         })
 
-    print(f"  {split}: {len(records)} images")
+    print(f"  {split}: {len(records)} images with masks")
     return ray.data.from_items(records)
 
 

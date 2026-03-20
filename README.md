@@ -60,6 +60,7 @@ pip install datasets tiktoken
 | `imagenet_classifier.py` | ImageNet inference (ResNet-50) with trained checkpoints |
 | `vit_imagenet_classifier.py` | ImageNet inference (ViT) with trained checkpoints |
 | `prepare_livecell.sh` | Downloads LIVECell dataset (already done — for reference) |
+| `prepare_livecell_masks.py` | Precomputes semantic masks from COCO annotations (already done) |
 | `livecell_finetune.py` | Swin-B fine-tuning on LIVECell — cell segmentation |
 | `cell_segmenter.py` | Cell segmentation inference — produces colored masks |
 
@@ -451,7 +452,21 @@ The model predicts three classes per pixel: background, cell interior, and cell 
 
 ### Data
 
-LIVECell is pre-installed at `/nrs/ml_datasets/livecell` (shared NFS, ~2 GB).
+LIVECell is pre-installed at `/nrs/ml_datasets/livecell` (shared NFS, ~2 GB). Precomputed semantic masks are at `/nrs/ml_datasets/livecell/masks/`.
+
+<details><summary>Preparing your own copy (optional)</summary>
+
+```bash
+# Download dataset
+./prepare_livecell.sh --data-dir=/your/path
+
+# Precompute semantic masks (one-time, uses all CPU cores, ~5 min)
+python prepare_livecell_masks.py --data-dir=/your/path
+```
+
+The mask preprocessing converts COCO instance annotations into per-pixel semantic masks (background/cell/boundary) and saves them as `.npy` files. This must be done once before training.
+
+</details>
 
 ### Train
 
