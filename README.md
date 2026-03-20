@@ -573,11 +573,3 @@ bjobs                              # list jobs
 tail -f ../output/*_<JOBID>.out    # training output
 tail -f ../output/*_<JOBID>.err    # errors
 ```
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| Out of memory | Reduce `--batch-size` |
-| Ray timeout | Resubmit — transient scheduling issue |
-| NCCL errors or hangs | Contact SCS |
