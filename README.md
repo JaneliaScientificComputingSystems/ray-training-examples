@@ -16,12 +16,21 @@ Five ready-to-run examples that progressively exercise the cluster:
 
 ## GPU Queues
 
+**Parallel queues** — whole nodes, multi-node training:
+
 | Queue | GPU | GPUs/node | Network | CPUs/node |
 |-------|-----|-----------|---------|-----------|
 | `gpu_h200_parallel` | H200 | 8 | InfiniBand NDR 400 Gb/s | 96 |
 | `gpu_h100_parallel` | H100 | 8 | InfiniBand NDR 400 Gb/s | 96 |
 
-Single-GPU inference jobs use `gpu_l4` (see `run_inference.sh`).
+**Non-parallel queues** — single node, request 1-8 GPUs with `--num-gpus`:
+
+| Queue | GPU | Max GPUs | Network |
+|-------|-----|----------|---------|
+| `gpu_h100` | H100 | 8 | InfiniBand |
+| `gpu_h200` | H200 | 8 | InfiniBand |
+| `gpu_l4` | L4 | 8 | Ethernet |
+| `gpu_a100` | A100 | 4 | Ethernet |
 
 ---
 
@@ -72,13 +81,27 @@ pip install datasets tiktoken
 ./submit_ray_job.sh <num_nodes> --script=SCRIPT [options] [-- script_args...]
 
 Options:
-  --queue=QUEUE        GPU queue (gpu_h200_parallel or gpu_h100_parallel)
+  --queue=QUEUE        GPU queue (default: gpu_h100_parallel)
+  --num-gpus=N         GPUs per node (non-parallel queues, default: 1)
+  --num-cpus=N         CPUs to request (non-parallel queues, default: 12 per GPU)
   --venv=PATH          Python venv path
   --job-name=NAME      Job name (default: ray_job)
-  --walltime=TIME      Walltime (default: 4:00 for <=2 nodes, 8:00 otherwise)
+  --walltime=TIME      Walltime (default: 24h non-parallel, 4-8h parallel)
 
 Script args go after '--':
   ./submit_ray_job.sh 2 --script=train.py -- --epochs=50
+```
+
+**Multi-node** (parallel queues — whole nodes, all GPUs):
+```bash
+./submit_ray_job.sh 2 --queue=gpu_h100_parallel --venv=~/ray_env \
+    --script=train.py -- --num-gpus=16 --num-nodes=2
+```
+
+**Single-node development** (non-parallel queues — request specific GPUs):
+```bash
+./submit_ray_job.sh 1 --queue=gpu_h100 --num-gpus=2 --venv=~/ray_env \
+    --script=train.py -- --num-gpus=2 --num-nodes=1
 ```
 
 ---
