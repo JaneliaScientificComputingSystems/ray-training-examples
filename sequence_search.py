@@ -115,9 +115,12 @@ def jaccard(set_a, set_b):
 def search_chunk(db_path, start, end, query_kmers_list, query_headers, k, top_n):
     """Search a byte range of the database for matches to query sequences.
 
-    Returns a list of (query_idx, score, db_header, db_length) tuples — the
-    top_n best hits per query found in this chunk.
+    Returns (hostname, results) where results is a list of
+    (query_idx, score, db_header, db_length) tuples.
     """
+    import platform
+    hostname = platform.node().split(".")[0]
+
     with open(db_path, "rb") as f:
         f.seek(start)
         data = f.read(end - start)
@@ -153,7 +156,7 @@ def search_chunk(db_path, start, end, query_kmers_list, query_headers, k, top_n)
         for score, header, length in top_hits[qi]:
             results.append((qi, score, header, length))
 
-    return results
+    return hostname, results
 
 
 def find_chunk_boundaries(db_path, num_chunks):
@@ -312,6 +315,7 @@ def main():
 
     # Collect results with progress
     all_results = [[] for _ in range(len(queries))]
+    node_chunks = {}  # hostname -> count of chunks processed
     completed = 0
     total = len(futures)
     last_pct = -1
@@ -319,7 +323,8 @@ def main():
     while futures:
         done, futures = ray.wait(futures, num_returns=min(10, len(futures)))
         for ref in done:
-            chunk_results = ray.get(ref)
+            hostname, chunk_results = ray.get(ref)
+            node_chunks[hostname] = node_chunks.get(hostname, 0) + 1
             for qi, score, header, length in chunk_results:
                 all_results[qi].append((score, header, length))
             completed += 1
@@ -334,8 +339,15 @@ def main():
 
     t_search = time.time()
 
-    # Merge and sort results per query
+    # Node distribution
     print()
+    print("Node distribution:")
+    for host, count in sorted(node_chunks.items()):
+        gb = db_size_gb * count / total
+        print(f"  {host}: {count} chunks ({gb:.1f} GB)")
+    print()
+
+    # Merge and sort results per query
     print("=" * 70)
     print("RESULTS")
     print("=" * 70)
