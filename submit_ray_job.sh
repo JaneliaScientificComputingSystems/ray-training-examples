@@ -314,7 +314,7 @@ if [ "${NETWORK_BACKEND}" = "IB" ]; then
 fi
 echo ""
 
-python ${PYTHON_SCRIPT} ${SCRIPT_ARGS}
+RAY_ADDRESS=\$head_node:\$port python ${PYTHON_SCRIPT} ${SCRIPT_ARGS}
 script_exit_code=\$?
 echo "Script exited: \$script_exit_code"
 

@@ -1,8 +1,8 @@
 # Ray Distributed Training Examples
 
-Distributed PyTorch training with Ray on Janelia's GPU cluster. Uses InfiniBand NDR (400 Gb/s) with GPUDirect RDMA on H200/H100 nodes for high-performance multi-node training.
+Distributed PyTorch training and data processing with Ray on Janelia's HPC cluster. GPU examples use InfiniBand NDR (400 Gb/s) with GPUDirect RDMA on H200/H100 nodes for high-performance multi-node training. CPU examples use Ray Data pipelines for distributed ETL and analysis.
 
-Five ready-to-run examples that progressively exercise the cluster:
+Six ready-to-run examples:
 
 | Example | Model | Dataset | Purpose |
 |---------|-------|---------|---------|
@@ -11,6 +11,7 @@ Five ready-to-run examples that progressively exercise the cluster:
 | ImageNet ResNet | ResNet-50 (25.6M) | ImageNet-1K, 138 GB | Industry-standard CNN benchmark |
 | ImageNet ViT | ViT base–huge (86M–632M) | ImageNet-1K, 138 GB | Vision Transformer — modern architecture, heavier IB load |
 | Cell Segmentation | Swin-B (88M) | LIVECell, 2 GB | Fine-tuning a pretrained model for microscopy — transfer learning |
+| Sequence Search | — (CPU only) | UniRef90, 28 GB | Distributed protein sequence search — k-mer similarity against BLAST DB |
 
 ---
 
@@ -31,6 +32,12 @@ Five ready-to-run examples that progressively exercise the cluster:
 | `gpu_h200` | H200 | 8 | InfiniBand |
 | `gpu_l4` | L4 | 8 | Ethernet |
 | `gpu_a100` | A100 | 4 | Ethernet |
+
+**CPU queue** — multi-node, no GPUs:
+
+| Queue | Network | CPUs/node |
+|-------|---------|-----------|
+| `cpu_parallel` | Ethernet | 128 |
 
 ---
 
@@ -55,7 +62,8 @@ pip install datasets tiktoken
 
 | File | Description |
 |------|-------------|
-| `submit_ray_job.sh` | LSF job submission — auto-configures NCCL per queue |
+| `submit_ray_job.sh` | LSF job submission for GPU training — auto-configures NCCL per queue |
+| `submit_ray_cpu_job.sh` | LSF job submission for CPU workloads — multi-node Ray Data pipelines |
 | `run_inference.sh` | LSF job submission for inference (single GPU) |
 | `cifar10_distributed_training.py` | ResNet-18 on CIFAR-10 — multi-node DDP |
 | `prepare_openwebtext.sh` | Downloads and tokenizes OpenWebText (already done — for reference) |
@@ -72,6 +80,7 @@ pip install datasets tiktoken
 | `prepare_livecell_masks.py` | Precomputes semantic masks from COCO annotations (already done) |
 | `livecell_finetune.py` | Swin-B fine-tuning on LIVECell — cell segmentation |
 | `cell_segmenter.py` | Cell segmentation inference — produces colored masks |
+| `sequence_search.py` | Distributed protein sequence search — k-mer similarity against FASTA DB |
 
 ---
 
@@ -102,6 +111,41 @@ Script args go after '--':
 ```bash
 ./submit_ray_job.sh 1 --queue=gpu_h100 --num-gpus=2 --venv=~/ray_env \
     --script=train.py -- --num-gpus=2 --num-nodes=1
+```
+
+## CPU Submission Script
+
+For CPU-only workloads (data pipelines, ETL, analysis) — no GPUs:
+
+```
+./submit_ray_cpu_job.sh --num-cpus=N --script=SCRIPT [options] [-- script_args...]
+
+Options:
+  --num-cpus=N         Total CPUs to request (required)
+  --script=FILE        Python script to run (required)
+  --queue=QUEUE        LSF queue (default: cpu_parallel)
+  --venv=PATH          Python venv path
+  --job-name=NAME      Job name (default: ray_cpu_job)
+  --walltime=TIME      Walltime HH:MM (default: 24:00)
+
+Script args go after '--':
+  ./submit_ray_cpu_job.sh --num-cpus=200 --script=pipeline.py -- --input /data
+```
+
+LSF decides how to distribute CPUs across nodes. The script discovers the allocation at runtime and starts Ray accordingly.
+
+```bash
+# Search your sequences against UniRef90
+./submit_ray_cpu_job.sh --num-cpus=128 --venv=~/ray_env \
+    --script=sequence_search.py -- --query my_proteins.fasta
+
+# Test mode — picks sample queries from the DB
+./submit_ray_cpu_job.sh --num-cpus=128 --venv=~/ray_env \
+    --script=sequence_search.py -- --test
+
+# Multi-node — 200 CPUs for faster search
+./submit_ray_cpu_job.sh --num-cpus=200 --venv=~/ray_env \
+    --script=sequence_search.py -- --query my_proteins.fasta --top-n=20
 ```
 
 ---
@@ -532,6 +576,61 @@ The segmenter takes a microscopy image and produces a colored overlay with indiv
 ```
 
 Output segmented images are saved to `../output/segmentation/`.
+
+---
+
+## Example 6: Protein Sequence Search (CPU)
+
+### About the example
+
+Searches query protein sequences against a large FASTA database using **k-mer similarity** — a distributed, approximate alternative to BLAST. The 28 GB UniRef90 database is split into chunks and searched in parallel across all available CPUs. This is the kind of workload researchers typically parallelize with Dask or custom MPI scripts.
+
+No GPUs needed. This runs on the `cpu_parallel` queue using `submit_ray_cpu_job.sh`.
+
+### How it works
+
+1. Parse query sequences and compute their k-mer fingerprints (set of all 3-mers)
+2. Split the 28 GB database into ~100 MB chunks aligned to sequence boundaries
+3. Distribute chunks across all CPUs — each worker reads its chunk, parses sequences, and scores them against the queries using Jaccard similarity on shared k-mers
+4. Merge results and report top hits per query
+
+### What it produces
+
+- Top N most similar database sequences for each query
+- Jaccard similarity scores (0–1, higher = more shared k-mers)
+- Search throughput (GB/s scanned)
+
+### Data
+
+UniRef90 is pre-installed at `/misc/blast/db/uniref90/uniref90.fasta` (28 GB, 83.7M protein sequences). No setup needed.
+
+### Run
+
+```bash
+# Test mode — picks 5 sample queries from the DB itself
+./submit_ray_cpu_job.sh --num-cpus=128 --venv=~/ray_env \
+    --script=sequence_search.py -- --test
+
+# Search your own sequences
+./submit_ray_cpu_job.sh --num-cpus=128 --venv=~/ray_env \
+    --script=sequence_search.py -- --query my_proteins.fasta
+
+# Multi-node — 200 CPUs for faster search
+./submit_ray_cpu_job.sh --num-cpus=200 --venv=~/ray_env \
+    --job-name=seq_search \
+    --script=sequence_search.py -- --query my_proteins.fasta --top-n=20
+```
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--query` | — | Query FASTA file (required unless `--test`) |
+| `--test` | — | Pick sample queries from the database |
+| `--db` | `/misc/blast/db/uniref90/uniref90.fasta` | Database FASTA file |
+| `--kmer-size` | 3 | K-mer size for similarity (3 = 8,000 possible protein 3-mers) |
+| `--top-n` | 10 | Report top N hits per query |
+| `--chunk-mb` | 100 | Database chunk size in MB |
 
 ---
 
